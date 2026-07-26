@@ -1,0 +1,10 @@
+# Firecrawl CLI cache
+.firecrawl/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local only
+reports/
