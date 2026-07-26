@@ -7,9 +7,12 @@ primary_region = 'sin'
 [build]
 
 [env]
-  VAISRAVANA_PAIRS = 'BTCUSDT,ETHUSDT,SOLUSDT'
+  # v0.1.0: extended 15-pair universe (leaders + 12 requested alts). resolve_symbol() maps
+  # PEPE/BONK -> 1000x contracts at runtime; plain perps pass through.
+  VAISRAVANA_PAIRS = 'BTCUSDT,ETHUSDT,SOLUSDT,PEPE,BONK,ENA,WLD,PENGU,AAVE,TAO,INJ,APE,PUMP,WIF,CRV'
   VAISRAVANA_DECISION_TF = '1m'
-  VAISRAVANA_TFS = '5m,15m'
+  # structural contexts for the Day(15m) + Swing(1h) profiles + scalping bias
+  VAISRAVANA_TFS = '5m,15m,1h'
   VAISRAVANA_KLINES = '600'
   VAISRAVANA_CYCLE_S = '60'
   VAISRAVANA_DB = '/data/vaisravana.db'

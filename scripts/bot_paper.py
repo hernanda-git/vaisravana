@@ -339,7 +339,7 @@ def run() -> None:
     last_status = 0.0
     # v0.1.0: the unique decision timeframes actually used by active strategies, so we
     # fetch each only once per pair per cycle (scalp=1m, day=15m, swing=1h default).
-    decision_tfs = sorted({p.decision_tf for p in ACTIVE_PROFILES}, key=b._tf_minutes)
+    decision_tfs = sorted({p.decision_tf for p in ACTIVE_PROFILES}, key=_tf_minutes)
     while True:
         try:
             # roll daily-loss window at UTC midnight

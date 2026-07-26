@@ -4,13 +4,13 @@
 
 # 🪙 Project Vaiśravaṇa
 
-### A stability-first, high-win-rate crypto-futures trading system
+### A stability-first, active multi-strategy crypto-futures trading system
 
 [![Status](https://img.shields.io/badge/status-paper--phase%20implemented-blue)](docs/34-implementation-status.md)
-[![Tests](https://img.shields.io/badge/tests-133%20passing-brightgreen)](docs/34-implementation-status.md)
-[![Win Rate Target](https://img.shields.io/badge/win%20rate-%E2%89%A585%25-brightgreen)](docs/30-concrete-spec.md)
+[![Tests](https://img.shields.io/badge/tests-176%20passing-brightgreen)](docs/34-implementation-status.md)
+[![Expectancy](https://img.shields.io/badge/expectancy-%3E%20%2B0.1R-brightgreen)](docs/30-concrete-spec.md)
 [![Drawdown](https://img.shields.io/badge/max%20drawdown-%3C%203%25-orange)](docs/25-safety-shadow-rollback.md)
-[![Timeframes](https://img.shields.io/badge/timeframes-5m%20%7C%2010m%20%7C%2015m-9cf)](docs/30-concrete-spec.md)
+[![Strategies](https://img.shields.io/badge/strategies-scalp%20%7C%20day%20%7C%20swing-9cf)](docs/30-concrete-spec.md)
 [![Exchange](https://img.shields.io/badge/exchange-Binance%20Futures-yellow)](docs/30-concrete-spec.md)
 [![Mode](https://img.shields.io/badge/mode-PAPER%20(guarded)-blue)](docs/41-improvements.md)
 [![Signals](https://img.shields.io/badge/signals-none-lightgrey)](#no-signals)
@@ -55,9 +55,9 @@ The system's prime directive is the **preservation** of capital through stable, 
 |---|------|---------|
 | **G1** | Time-sensitive accuracy | Decision→fill < 2s |
 | **G2** | Stability | Max drawdown < 3% (unreal & live) |
-| **G3** | High win rate (≥85%) | Per-pair/per-TF shadow WR ≥ 85% to go live |
-| **G4** | Micro-timeframe trades | 5m / 10m / 15m windows |
-| **G5** | All Binance pairs | Full USDT-perp universe, liquidity-filtered |
+| **G3** | Positive expectancy | Expectancy-first promotion: +EV (≥+0.10R) & PF>1.2 with WR only as a 56% floor (above taker break-even) — not an 85% target |
+| **G4** | Active across horizons | Concurrent Scalping (1m) + Day (15m) + Swing (1h) on every pair |
+| **G5** | 15-pair monitored universe | BTC/ETH/SOL + 1000PEPE, 1000BONK, ENA, WLD, PENGU, AAVE, TAO, INJ, APE, PUMP, WIF, CRV (override via VAISRAVANA_PAIRS) |
 | **G6** | Shadow-first | Every win/loss recorded in unreal before live |
 
 ---

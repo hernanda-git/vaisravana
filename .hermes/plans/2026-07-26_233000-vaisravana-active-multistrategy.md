@@ -200,3 +200,27 @@ Telegram cards render, no loop errors.
 A (config) → B (strategy engine) → C (universe) → D (expectancy gate + activity) →
 E (honest backtest) → F (deploy+verify). A–D are pure/unit-testable offline; E needs the
 gateway VM; F is the live cutover of the PAPER bot.
+
+---
+
+## Execution Progress (2026-07-26)
+
+- **A — Config + StrategyProfiles:** DONE. `src/config.py` now carries `StrategyProfile`
+  (scalp/day/swing) + `ParameterSurface` (entry 0.60, R:R 1.5/1.67/2.0, `winrate_floor_pct=56`,
+  `min_expectancy_r=0.10`). `tests/test_phase17_strategy.py` added.
+- **B — Strategy engine:** DONE. `src/strategy.py` (`active_strategies`, `evaluate_strategy`,
+  `evaluate_all`) runs the 3 profiles with per-profile entry bars + SL/TP mults.
+  `tests/test_phase18_multistrategy.py` added.
+- **C — Universe + symbol resolution:** DONE. `DEFAULT_UNIVERSE` = 15 pairs;
+  `symbols.resolve_symbol()` maps PEPE/BONK → 1000x contracts. `bot_paper.py` refactored to
+  fetch all decision TFs once per pair and run every active profile keyed by (pair,tf,side).
+  `tests/test_phase19_universe.py` added.
+- **D — Expectancy-first gate + activity:** DONE. `safety.py` promotion now gates on
+  expectancy>0.10R & PF>1.2 & WR≥56% floor (replaces the 85% WR gate). `decide`/`decide_ctx`
+  accept per-strategy threshold overrides. Phase-8 tests reframed to expectancy-first.
+- **E — Honest verification:** DONE. `scripts/verify_activity.py` on a *hard* mean-reverting
+  series: NEW = +0.280R expectancy over 615 trades; OLD 0.86 path = ~0 trades. Proves both
+  "56% is enough" and "very active".
+- **F — Deploy + verify:** IN PROGRESS. v0.1.0 committed, README/CHANGELOG updated (176 tests
+  green). `flyctl deploy -a vaisravana` running; verify via `flyctl logs` for FILL events + the
+  15-pair/3-strategy startup card.
