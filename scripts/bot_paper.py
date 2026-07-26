@@ -52,7 +52,10 @@ DB_PATH = os.getenv("VAISRAVANA_DB", "/data/vaisravana.db")
 SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", "/data/surface.json")
 # Phase 11 opt-in: off | research | research+context. Default OFF (deterministic).
 LLM_MODE = os.getenv("VAISRAVANA_LLM", "off")
+# LLM transport (OpenAI-compatible chat/completions). Defaults to OpenCode Zen gateway.
 ZEN_API_KEY = os.getenv("ZEN_API_KEY", "")
+ZEN_URL = os.getenv("ZEN_URL", "https://opencode.ai/zen/go/v1/chat/completions")
+ZEN_MODEL = os.getenv("ZEN_MODEL", "deepseek-v4-flash")
 RESEARCH_EVERY_S = int(os.getenv("VAISRAVANA_RESEARCH_EVERY_S", "1800"))
 
 
@@ -153,7 +156,7 @@ def run() -> None:
     # Default OFF -> bot is 100% deterministic, identical to before.
     if LLM_MODE != "off" and ZEN_API_KEY:
         research = threading.Thread(
-            target=research_loop, args=(conn, notifier), daemon=True)
+            target=research_loop, args=(notifier,), daemon=True)
         research.start()
     elif LLM_MODE != "off" and not ZEN_API_KEY:
         log.warning("VAISRAVANA_LLM=%s but ZEN_API_KEY unset — research disabled", LLM_MODE)
@@ -211,20 +214,23 @@ def _shadow_replay(conn: sqlite3.Connection, surface: config.ParameterSurface
     return evals, fp_fn
 
 
-def research_loop(conn: sqlite3.Connection, notifier: TelegramNotifier) -> None:
+def research_loop(notifier: TelegramNotifier, db_path: str = DB_PATH) -> None:
     """Offline propose-only Sentinel loop (Phase 11). Runs in a daemon thread.
 
+    Opens its OWN sqlite connection (SQLite objects are not shared across threads).
     Every RESEARCH_EVERY_S: gather real eval data -> LLMResearcher.propose ->
     Sentinel.cycle with a re-weight shadow replay -> if PROMOTED, persist surface to
     disk (picked up on next restart) and notify Telegram. The LLM output is funneled
     through apply_proposal (±10%, ≤4, doc-21 bounds) + shadow gate, so a hallucination
     can at most waste one replay. Never flips a (pair,tf,side) to live (human gate).
     """
-    log.info("LLM research loop starting (mode=%s)", LLM_MODE)
-    client = ZenClient(api_key=ZEN_API_KEY)
+    conn = init_db(db_path)  # thread-local connection
+    log.info("LLM research loop starting (mode=%s, url=%s, model=%s)",
+             LLM_MODE, ZEN_URL, ZEN_MODEL)
+    client = ZenClient(api_key=ZEN_API_KEY, url=ZEN_URL, model=ZEN_MODEL)
     use_context = LLM_MODE == "research+context"
-    researcher = LLMResearcher(client, enabled=True)
-    narrative = NarrativeResearcher(client, enabled=use_context)
+    researcher = LLMResearcher(client, enabled=True, url=ZEN_URL, model=ZEN_MODEL)
+    narrative = NarrativeResearcher(client, enabled=use_context, url=ZEN_URL, model=ZEN_MODEL)
     last = 0.0
     while True:
         try:
