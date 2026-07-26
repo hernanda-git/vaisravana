@@ -18,3 +18,6 @@ Thumbs.db
 
 # Local only
 reports/
+
+# Fetched klines (regenerable via scripts/fetch_klines_via_gateway.py)
+data/klines/
