@@ -44,3 +44,13 @@ All 10 plan phases implemented, tested, and pushed. **105 tests passing** (all m
 .venv/Scripts/python scripts/run_backtest_real.py    # real-data replay + report
 .venv/Scripts/python scripts/run_backtest_demo.py    # synthetic pipeline smoke
 ```
+
+## Phase 12 — Time-sensitive 1m cadence + MTF context (2026-07-26)
+- Decision cadence decoupled from structural timeframe: `DECISION_TF=1m` by default,
+  `TFS=5m,15m` are MTF context for `htf_bias`/`mtf_aligned`.
+- `build_state_mtf()` builds a 1m decision state and injects higher-TF bias → the
+  EXISTING 7-factor engine becomes multi-timeframe WITHOUT engine edits.
+- Act on the latest CLOSED 1m bar → "jump immediately" in PAPER. `CYCLE_S=60`.
+- Immediacy gate: only act when `mtf_aligned` (don't fight the HTF bias). Entry bar
+  stays 0.90; actionability comes from cadence, not a looser threshold.
+- 1m real-data backtest + 4 cadence tests added. Live: deciding every minute, tf=1m.
