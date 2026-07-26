@@ -210,7 +210,7 @@ timestamps, `win`/`loss` booleans, and rolling `win_pct`/`loss_pct` per pair×TF
 
 ---
 
-## Phase 8 — Orchestration, Promotion Gate & Kill-Switch
+## Phase 8 — Orchestration, Promotion Gate & Kill-Switch  ✅ DONE (2026-07-26)
 
 **Objective:** Wire the daily loop (`doc 27`), the per-pair×TF promotion gate (`doc 30` §6),
 and all kill-switches (`doc 25`, `doc 30` §7).
