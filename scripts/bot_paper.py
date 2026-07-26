@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import marketdata, config, decision, lifecycle, safety, telemetry, db
+import marketdata, config, decision, lifecycle, safety, telemetry, db, version as vmod
 from telegram_bot import TelegramNotifier
 from sentinel import Sentinel
 from evaluation import evaluate
@@ -198,8 +198,9 @@ def run() -> None:
         chat_id=os.getenv("NOTIFY_CHAT_ID", ""),
     )
     open_trades: dict[tuple, object] = lc.get_open_positions()
-    log.info("Vaiśravaṇa PAPER bot up: %d pairs · decide=%s · ctx=%s · %d open positions reloaded "
-             "(LLM=%s)", len(PAIRS), DECISION_TF, ",".join(TFS), len(open_trades), LLM_MODE)
+    ver = vmod.read_version()
+    log.info("Vaiśravaṇa PAPER bot up: %d pairs · decide=%s · ctx=%s · v%s · %d open positions reloaded "
+             "(LLM=%s)", len(PAIRS), DECISION_TF, ",".join(TFS), ver, len(open_trades), LLM_MODE)
     notifier.notify_status(
         "Vaiśravaṇa PAPER bot started",
         f"pairs: {', '.join(PAIRS)}\n"
@@ -209,6 +210,8 @@ def run() -> None:
         f"mode: PAPER (no live orders)\nLLM research: {LLM_MODE}\n"
         f"open positions reloaded: {len(open_trades)}",
     )
+    # Phase 13: announce the deployed version + what changed on every (re)start.
+    notifier.notify_deploy(ver, vmod.latest_changelog())
 
     # Phase 11: start the offline LLM research loop (propose-only Sentinel).
     # Default OFF -> bot is 100% deterministic, identical to before.

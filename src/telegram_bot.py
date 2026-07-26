@@ -130,5 +130,14 @@ class TelegramNotifier:
         )
         return self.send_message(text)
 
+    def notify_deploy(self, version: str, changelog: str) -> bool:
+        """Phase 13 — announce the deployed version + what changed on (re)start."""
+        body = _md_escape(changelog).strip() if changelog else "_no changelog entry_"
+        text = (
+            f"🚀 **Vaiśravaṇa deployed** `v{_md_escape(version)}`\n"
+            f"_{body}_"
+        )
+        return self.send_message(text)
+
     def notify_status(self, title: str, body_md: str) -> bool:
         return self.send_message(f"📊 **{_md_escape(title)}**\n\n{body_md}")
