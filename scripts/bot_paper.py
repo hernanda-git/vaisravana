@@ -398,8 +398,8 @@ def run() -> None:
                     continue
                 res = lc.close(t, exit_price=ev.price, close_reason=ev.reason)
                 kill.record_close(ev.symbol, ev.tf, ev.side, win=bool(res["win"]))
-                if loss_book is not None and res["pnl_usd"] < 0:
-                    loss_book["usd"] += -res["pnl_usd"]
+                if realized_loss_today is not None and res["pnl_usd"] < 0:
+                    realized_loss_today["usd"] += -res["pnl_usd"]
                 tel.exec_event(t.correlation_id, ev.symbol, DECISION_TF, "CLOSE",
                                side=ev.side, price=ev.price, status=ev.reason)
                 notifier.notify_close(ev.symbol, DECISION_TF, ev.side, ev.price,

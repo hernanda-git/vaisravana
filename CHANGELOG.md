@@ -1,5 +1,23 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.1.4 (2026-07-26) — fix loss_book NameError in close handler
+- **BUG FIX:** `loss_book → realized_loss_today` in `run()` close handler (line 401-402).
+  The close handler referenced `loss_book` which was only a parameter name in `_decide_tick`,
+  not defined in `run()` scope → `NameError: name 'loss_book' is not defined` every time
+  a trade closed at a loss. Now correctly uses the `realized_loss_today` dict.
+- **TEST:** 3 new tests for `_close()` — loss accumulation, win not debited, None-safe.
+
+## v0.1.3 (2026-07-26) — fix CloseEvent missing tf+side (loop error)
+- **BUG FIX:** PositionMonitor CloseEvent init was missing `tf` and `side` fields,
+  causing a recurring `AttributeError` every time a SL/TP was hit in PAPER mode.
+  The rest of the loop expected `ev.tf` and `ev.side` to exist when looking up
+  the open_trades key. Fixed by including both in the event.
+
+## v0.1.2 (2026-07-26) — test health_clean coverage
+- **COVERAGE:** 5 new unit tests for `health_clean()` — empty list, PASS-only,
+  FAIL-only, outside-window, mixed — ensuring the kill-switch auto-reset path is
+  regression-safe.
+
 ## v0.1.1 (2026-07-26) — decisions_log 1-day auto-prune
 - **DB auto-prune (owner ask):** `decisions_log` (the most-spammed table — one row per
   pair×strategy per 60s tick, ~65k rows/day) is now pruned of rows older than 1 day.
