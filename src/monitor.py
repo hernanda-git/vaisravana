@@ -45,9 +45,11 @@ class Position:
 class CloseEvent:
     correlation_id: str
     symbol: str
-    reason: str                # SL / TP / MAXHOLD / ORPHAN
+    tf: str                     # needed by main loop to key into open_trades
+    side: str                   # BUY / SELL — needed by main loop for kill/notify
+    reason: str                 # SL / TP / MAXHOLD / ORPHAN
     price: float
-    closed_by: str             # EXCHANGE_STOP / MONITOR
+    closed_by: str              # EXCHANGE_STOP / MONITOR
 
 
 class PositionMonitor:
@@ -78,7 +80,8 @@ class PositionMonitor:
         pos.closed = True
         pos.close_reason = reason
         self.close_events.append(
-            CloseEvent(pos.correlation_id, pos.symbol, reason, price, "MONITOR")
+            CloseEvent(pos.correlation_id, pos.symbol, pos.tf, pos.side,
+                       reason, price, "MONITOR")
         )
 
     def _sl_breached(self, pos: Position, mark: float) -> bool:

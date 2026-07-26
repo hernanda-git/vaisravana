@@ -95,6 +95,32 @@ def test_stop_loss_fires_on_mark_price():
     ev = events[0]
     assert ev.reason == "SL"
     assert ev.symbol == "BTCUSDT"
+    assert ev.tf == "5m"
+    assert ev.side == "BUY"
+
+
+def test_close_event_carries_tf_and_side():
+    """CloseEvent must carry tf+side for the main loop to key into open_trades."""
+    # SELL: SL above entry (price goes up → loss), TP below entry (price goes down → profit)
+    mon, ex = _monitor_with_position(entry=200, sl=201, tp=198, side="SELL")
+    ex.set_price("BTCUSDT", 197.0)  # TP hit for SELL (mark <= tp)
+    events = mon.tick()
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.reason == "TP"
+    assert ev.tf == "5m"
+    assert ev.side == "SELL"
+    assert ev.symbol == "BTCUSDT"
+    assert ev.price == 197.0
+    # also verify SELL-side SL breach
+    mon2, ex2 = _monitor_with_position(entry=100, sl=101, tp=98, side="SELL")
+    ex2.set_price("BTCUSDT", 101.5)  # SL for SELL = mark >= stop_price
+    events2 = mon2.tick()
+    assert len(events2) == 1
+    ev2 = events2[0]
+    assert ev2.reason == "SL"
+    assert ev2.tf == "5m"
+    assert ev2.side == "SELL"
 
 
 def test_take_profit_fires_on_mark_price():
