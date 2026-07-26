@@ -152,7 +152,7 @@ Implements `doc 30` §3 (validate→repair→resubmit-once), `doc 32` Lessons 2-
 
 ---
 
-## Phase 5 — Trade Lifecycle & Full Logging
+## Phase 5 — Trade Lifecycle & Full Logging  ✅ DONE (2026-07-26)
 
 **Objective:** Close the loop — every trade writes complete `trade_logs` rows with lifecycle
 timestamps, `win`/`loss` booleans, and rolling `win_pct`/`loss_pct` per pair×TF (`doc 30` §4).
