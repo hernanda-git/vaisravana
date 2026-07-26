@@ -16,8 +16,8 @@ __pycache__/
 Thumbs.db
 *.swp
 
-# Local only
-reports/
+# Local only (runtime artifacts; committed reports live in docs/reports/)
+/reports/
 
 # Fetched klines (regenerable via scripts/fetch_klines_via_gateway.py)
 data/klines/
