@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import pytest  # noqa: E402
 
-from telegram_bot import TelegramNotifier, _md_escape  # noqa: E402
+from telegram_bot import TelegramNotifier, mdv2_escape  # noqa: E402
 from db import init_db  # noqa: E402
 from lifecycle import TradeLifecycle  # noqa: E402
 
@@ -22,12 +22,12 @@ class _FakeClient:
     """Records sendMessage calls; lets us assert escape + fallback behaviour."""
     def __init__(self):
         self.calls = []
-        self._mode = "markdown"  # what sendMessage('Markdown') returns
+        self._mode = "markdown"  # what sendMessage('MarkdownV2') returns
 
     def post(self, url, json=None):
         mode = json.get("parse_mode", "plain")
         self.calls.append(json)
-        if mode == "Markdown" and self._mode == "markdown_broken":
+        if mode == "MarkdownV2" and self._mode == "markdown_broken":
             return _FakeResp(400, "Bad Request: can't parse entities")
         return _FakeResp(200)
 
@@ -41,10 +41,10 @@ class StubNotifier(TelegramNotifier):
         return self._client
 
 
-def test_md_escape_escapes_special_chars():
-    out = _md_escape("BTC*USDT won +2.5R (entry 60_000)")
+def test_mdv2_escape_escapes_special_chars():
+    out = mdv2_escape("BTC*USDT won +2.5R (entry 60_000)")
     assert "\\*" in out and "\\+" in out and "\\_" in out
-    assert _md_escape("") == ""
+    assert mdv2_escape("") == ""
 
 
 def test_notify_decision_markdown_and_escapes_reason():
@@ -70,8 +70,19 @@ def test_plain_text_fallback_on_parse_entities():
     ok = n.notify_status("X", "weird * text _ here")
     assert ok is True
     # first call failed markdown, second plain-text succeeded
-    assert n._client.calls[0].get("parse_mode") == "Markdown"
+    assert n._client.calls[0].get("parse_mode") == "MarkdownV2"
     assert "parse_mode" not in n._client.calls[1]
+
+
+def test_startup_card_renders_version_cleanly():
+    n = StubNotifier()
+    n.notify_startup("0.0.7", ["BTCUSDT", "ETHUSDT"], "1m", ["5m"], 60, "off", 0)
+    body = n._client.calls[0]["text"]
+    # version must NOT be backslash-escaped (the old v0\\.0\\.4 bug)
+    assert "v0.0.7" in body
+    assert r"v0\.0\.7" not in body
+    # no em-dash artifacts
+    assert "—" not in body
 
 
 def test_no_token_silent_false(tmp_path):
@@ -91,3 +102,11 @@ def test_get_open_positions_restart_safe():
     # after close, reload is empty
     lc.close(t, 101.0, "TP")
     assert lc.get_open_positions() == {}
+
+
+def test_health_check_sent_on_deploy():
+    n = StubNotifier()
+    ok = n.notify_health_check("0.0.7", "sin", 0, feed_ok=True)
+    assert ok is True
+    body = n._client.calls[0]["text"]
+    assert "Health Check" in body and "v0.0.7" in body and "sin" in body

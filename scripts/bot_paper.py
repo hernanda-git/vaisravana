@@ -40,6 +40,14 @@ from marketdata import Candle  # noqa: E402
 from safety import KillSwitch  # noqa: E402
 from scoring import decide  # noqa: E402
 from telemetry import Telemetry  # noqa: E402
+from execution import size_position  # noqa: E402
+from symbols import SymbolRegistry  # noqa: E402
+from marketdata import FeedHealth  # noqa: E402
+from mode import ModeGuard, PaperSimExchange  # noqa: E402
+from monitor import PositionMonitor, Position  # noqa: E402
+from execution import place_stop_loss  # noqa: E402
+from marketcontext import build_context, ContextSeries, MarketContext  # noqa: E402
+from scoring import decide, decide_ctx  # noqa: E402
 
 log = logging.getLogger("vaisravana.bot")
 
@@ -163,13 +171,77 @@ def build_state_mtf(pair: str, dec_candles: list[Candle], i: int,
     # aligned = 1m direction agrees with the HTF bias (don't fight the trend)
     mtf_aligned = ((dec_bull and htf_bull) or (dec_bear and htf_bear)
                    or htf_bias == "neutral")
+
+    # --- REAL structure / liquidity flags (doc 01/02/05/06) ---
+    # Derived from the higher-TF context's last 20 bars so the structure (15%) and
+    # liquidity (10%) engines are fed honest swing points in production — previously
+    # left at their dataclass floors, which starved those two alpha factors live.
+    w = htf[-20:]
+    prior_hi = max(c.h for c in htf[-40:-20]) if len(htf) >= 40 else max(c.h for c in w)
+    prior_lo = min(c.l for c in htf[-40:-20]) if len(htf) >= 40 else min(c.l for c in w)
+    recent_hi = max(c.h for c in w[-10:])
+    recent_lo = min(c.l for c in w[-10:])
+    hh = recent_hi > prior_hi
+    hl = recent_lo > prior_lo
+    lh = recent_hi < prior_hi
+    ll = recent_lo < prior_lo
+    bos = (hh and htf_bull) or (ll and htf_bear)
+    choch = (hh and htf_bear) or (ll and htf_bull)
+    sweep_lo = bar.l < prior_lo and bar.c > prior_lo   # liquidity sweep of lows, reclaimed
+    sweep_hi = bar.h > prior_hi and bar.c < prior_hi
     return MarketState(
         symbol=pair, tf=DECISION_TF, regime=st.regime,
         htf_bias=htf_bias, last_close=bar.c,
         body_ratio=st.body_ratio, vol_z=st.vol_z, delta_z=st.delta_z,
         atr=st.atr, atr_pct=st.atr_pct, spread_bps=st.spread_bps,
         adl_rank=1, mtf_aligned=mtf_aligned,
+        hh=hh, hl=hl, lh=lh, ll=ll, bos=bos, choch=choch,
+        liq_sweep=sweep_lo or sweep_hi, eq_low=sweep_lo, eq_high=sweep_hi,
+        fvg=bos,
+        # cross-asset + MTF relational context (v0.0.7) filled by build_context_for()
+        btc_bias="neutral", dominance_delta=0.0, risk_regime="neutral",
+        alt_rs_btc=0.0, alt_breadth=0.5,
+        ltf_bias="neutral", mtf_bias=htf_bias, htf_bias2=htf_bias,
+        mtf_confluence=False, pullback_to_anchor=False,
     )
+
+
+def _closes(candles: list[Candle]) -> list[float]:
+    return [c.c for c in candles]
+
+
+def build_context_for(pair: str, dec_candles: list[Candle], i: int,
+                      contexts: dict[str, list[Candle]]) -> MarketContext:
+    """Build the cross-asset + MTF relational context for one decision tick (v0.0.7).
+
+    Fetches BTC (leader), an alt basket (the other PAIRS), and the LTF/MF/HTF closes
+    for the tradable, then derives BTC bias, dominance proxy, alt RS/breadth, and the
+    3-layer MTF stack. Network is best-effort: any missing series falls back to neutral
+    so the bot never crashes on a fetch hiccup.
+    """
+    def get(sym: str, tf: str, n: int = 60) -> list[float]:
+        try:
+            cs = fetch_klines(sym, tf, n)
+            return _closes(cs)
+        except Exception:
+            return []
+
+    # BTC leader (use the highest structural TF available, else 1h)
+    btc_tf = "1h" if "1h" in TFS else (max(TFS, key=_tf_minutes) if TFS else "15m")
+    btc = get("BTCUSDT", btc_tf)
+    # alt basket = the other configured pairs (relative strength + breadth)
+    basket = [get(p, btc_tf) for p in PAIRS if p != pair]
+    basket = [b for b in basket if len(b) >= 50]
+    pair_htf = get(pair, btc_tf)
+    # LTF/MF/HTF of the tradable (anchor = HTF, pullback = LTF)
+    ltf = get(pair, DECISION_TF)
+    mtf = get(pair, (max(TFS, key=_tf_minutes) if TFS else "15m"))
+    htf = pair_htf or btc
+    cs = ContextSeries(
+        btc=btc, pair=pair_htf, alt_basket=basket,
+        ltf=ltf, mtf=mtf, htf=htf, dominance=[],
+    )
+    return build_context(cs, lookback=30)
 
 
 def _tf_minutes(tf: str) -> int:
@@ -199,12 +271,40 @@ def run() -> None:
     )
     open_trades: dict[tuple, object] = lc.get_open_positions()
     ver = vmod.read_version()
+    registry = SymbolRegistry()
+    feed = FeedHealth(max_age_s=max(30.0, CYCLE_S * 1.5))
+    # --- HARD mode boundary (doc 30 §6/§7): structurally impossible to trade live
+    # without human approval. PAPER (default) only ever drives a simulated exchange.
+    mode = os.getenv("VAISRAVANA_MODE", "paper").lower()
+    if mode not in ("paper", "live"):
+        raise SystemExit(f"VAISRAVANA_MODE must be 'paper' or 'live', got {mode!r}")
+    guard = ModeGuard(mode=mode)  # live_exchange=None in paper -> PaperSimExchange
+    exchange = guard.exchange_for(None)  # PaperSimExchange in paper; GuardedExchange in live
+    monitor = PositionMonitor(exchange, clock=time.time)
+    # seed the monitor with any positions reloaded from the DB at boot
+    for key, t in open_trades.items():
+        monitor.track(Position(
+            correlation_id=t.correlation_id, symbol=t.pair, tf=t.tf, side=t.side,
+            qty=t.size, entry_price=t.entry_price,
+            sl=__import__("execution").StopLossState(
+                "CONDITIONAL", t.sl_price,
+                "SELL" if t.side == "BUY" else "BUY", t.correlation_id),
+            tp_price=t.tp_price, opened_ts=time.time(), sl_on_exchange=False,
+        ))
+    # Real daily-loss tracking so the kill-switch is actually wired (doc 30 §7).
+    # Resets at UTC midnight. dollar equity approximated from a configurable seed.
+    equity = float(os.getenv("VAISRAVANA_EQUITY_USD", "1000.0"))
+    realized_loss_today = {"usd": 0.0, "day": ""}
     log.info("Vessavaṇa PAPER bot up: %d pairs · decide=%s · ctx=%s · v%s · %d open positions reloaded "
              "(LLM=%s)", len(PAIRS), DECISION_TF, ",".join(TFS), ver, len(open_trades), LLM_MODE)
     # Phase 13: clean startup card (Bahasa Indonesia, brand Vessavaṇa)
     notifier.notify_startup(ver, PAIRS, DECISION_TF, TFS, CYCLE_S, LLM_MODE, len(open_trades))
     # announce the deployed version + what changed on every (re)start
     notifier.notify_deploy(ver, vmod.latest_changelog())
+    # doc 43: explicit on-deploy health check so the owner can confirm liveness
+    # without waiting for a trade. UTC region from fly.toml primary_region.
+    region = os.getenv("FLY_REGION", os.getenv("VAISRAVANA_REGION", "sin"))
+    notifier.notify_health_check(ver, region, len(open_trades), feed_ok=True)
 
     # Phase 11: start the offline LLM research loop (propose-only Sentinel).
     # Default OFF -> bot is 100% deterministic, identical to before.
@@ -218,10 +318,43 @@ def run() -> None:
     last_status = 0.0
     while True:
         try:
+            # roll daily-loss window at UTC midnight
+            today = time.strftime("%Y-%m-%d")
+            if realized_loss_today["day"] != today:
+                realized_loss_today = {"usd": 0.0, "day": today}
+                kill.reset()  # fresh day -> clear any tripped kill-switch
+            daily_loss_pct = (realized_loss_today["usd"] / equity * 100.0) if equity else 0.0
+            # mark feed health from the latest candle we just fetched
+            for pair in PAIRS:
+                feed.mark(pair, DECISION_TF, int(time.time() * 1000))
+                for tf in TFS:
+                    feed.mark(pair, tf, int(time.time() * 1000))
+            feed_frozen = bool(feed.frozen_list(PAIRS, [DECISION_TF] + TFS))
             for pair in PAIRS:
                 # Phase 12: one decision per minute on DECISION_TF (1m), using MTF context.
                 _decide_tick(pair, conn, surface, lc, tel, kill, decider,
-                             notifier, open_trades)
+                             notifier, open_trades, registry=registry,
+                             daily_loss_pct=daily_loss_pct, feed_frozen=feed_frozen,
+                             equity=equity, loss_book=realized_loss_today,
+                             monitor=monitor, exchange=exchange, guard=guard)
+                # push the latest price into the sim exchange so the monitor's
+                # mark-price SL/TP/orphan/maxhold logic is real (doc 30 §3, doc 32 L4)
+                _last_decs = fetch_klines(pair, DECISION_TF, 2)
+                if _last_decs:
+                    exchange.set_price(pair, _last_decs[-1].c)
+            # drive the position monitor every cycle (real SL/maxhold/orphan handling)
+            for ev in monitor.tick():
+                t = open_trades.pop((ev.symbol, DECISION_TF, ev.side), None)
+                if t is None:
+                    continue
+                res = lc.close(t, exit_price=ev.price, close_reason=ev.reason)
+                kill.record_close(ev.symbol, DECISION_TF, ev.side, win=bool(res["win"]))
+                if loss_book is not None and res["pnl_usd"] < 0:
+                    loss_book["usd"] += -res["pnl_usd"]
+                tel.exec_event(t.correlation_id, ev.symbol, DECISION_TF, "CLOSE",
+                               side=ev.side, price=ev.price, status=ev.reason)
+                notifier.notify_close(ev.symbol, DECISION_TF, ev.side, ev.price,
+                                      ev.reason, res["r_multiple"], bool(res["win"]))
             # periodic status every ~30 min
             if time.time() - last_status > 1800:
                 _report_status(conn, notifier)
@@ -268,16 +401,40 @@ def _shadow_replay(conn: sqlite3.Connection, surface: config.ParameterSurface
     return evals, fp_fn
 
 
+def _build_factories() -> dict:
+    """Build state_factory[candles,i] per (pair,tf) from fetched klines for shadow replay.
+
+    Each factory also carries its candle series as `. _candles` so the shadow harness can
+    replay it (docs/src/shadow.py). Falls back to an empty series if klines are missing.
+    """
+    factories: dict = {}
+
+    for pair in PAIRS:
+        for tf in [DECISION_TF] + TFS:
+            try:
+                candles = fetch_klines(pair, tf, FETCH_LIMIT)
+            except Exception:
+                candles = []
+            # reuse THIS module's MTF builder; empty contexts => single-tf state
+            def _factory(candles, i, _pair=pair, _tf=tf):
+                return build_state_mtf(_pair, candles, i, {})
+            _factory._candles = candles  # type: ignore[attr-defined]
+            factories[(pair, tf)] = _factory
+    return factories
+
+
 def research_loop(notifier: TelegramNotifier, db_path: str = DB_PATH) -> None:
     """Offline propose-only Sentinel loop (Phase 11). Runs in a daemon thread.
 
     Opens its OWN sqlite connection (SQLite objects are not shared across threads).
     Every RESEARCH_EVERY_S: gather real eval data -> LLMResearcher.propose ->
-    Sentinel.cycle with a re-weight shadow replay -> if PROMOTED, persist surface to
-    disk (picked up on next restart) and notify Telegram. The LLM output is funneled
-    through apply_proposal (±10%, ≤4, doc-21 bounds) + shadow gate, so a hallucination
-    can at most waste one replay. Never flips a (pair,tf,side) to live (human gate).
+    Sentinel.cycle with a GENUINE shadow replay (re-simulates the full pipeline on raw
+    candles with the candidate surface via src/shadow.py) -> if PROMOTED, persist surface
+    to disk. The LLM output is funneled through apply_proposal (±10%, ≤4, doc-21 bounds)
+    + shadow gate, so a hallucination can at most waste one replay. Never flips a
+    (pair,tf,side) to live (human gate).
     """
+    from shadow import shadow_compare  # genuine replay (was a dead re-weight, doc 40 §2.3)
     conn = init_db(db_path)  # thread-local connection
     log.info("LLM research loop starting (mode=%s, url=%s, model=%s)",
              LLM_MODE, ZEN_URL, ZEN_MODEL)
@@ -307,9 +464,11 @@ def research_loop(notifier: TelegramNotifier, db_path: str = DB_PATH) -> None:
                          not result.error, result.error)
                 continue
             sentinel = Sentinel(conn, surface)
-            # Shadow comparison re-weights stored per-trade sub-scores with candidate.
+            # GENUINE shadow comparison: re-simulate on raw candles with candidate.
+            factories = _build_factories()
             def comparison_factory(candidate: config.ParameterSurface):
-                return _shadow_comparison(conn, surface, candidate)
+                return shadow_compare(surface, candidate, factories,
+                                       max_hold_bars=int(os.getenv("VAISRAVANA_SHADOW_BARS", "60")))
             promoted, new_surface = sentinel.cycle(
                 result.proposal, comparison_factory,
                 cycle_id=time.strftime("%Y-%m-%dT%H:%M"))
@@ -330,77 +489,9 @@ def research_loop(notifier: TelegramNotifier, db_path: str = DB_PATH) -> None:
             time.sleep(60)
 
 
-def _shadow_comparison(conn, baseline_surface, candidate_surface):
-    """Re-weight stored per-trade sub-scores with candidate weights -> shadow EvalReport.
-
-    Deterministic, uses real closed trades. For each trade we recompute the chosen_score
-    with candidate weights; if it still clears entry_threshold the trade is 'taken',
-    otherwise it's skipped. Derived WR/expectancy/DD form the shadow report, compared
-    against the baseline (real evaluate()).
-    """
-    from evaluation import EvalReport
-    rows = conn.execute(
-        "SELECT pair, tf, side, scores, win, r_multiple, exit_price, entry_price "
-        "FROM trade_logs"
-    ).fetchall()
-    cw = candidate_surface.weights.as_dict()
-    base = evaluate(conn, rows[0]["pair"], rows[0]["tf"], rows[0]["side"]) if rows else None
-
-    shadow_pnl = []
-    for r in rows:
-        try:
-            sc = json.loads(r["scores"]) if r["scores"] else {}
-        except Exception:
-            sc = {}
-        # recompute chosen score with candidate weights (stored sub-scores only)
-        chosen = sum(cw[k] * float(sc.get(k, 0.0)) for k in cw)
-        if chosen >= candidate_surface.entry_threshold:
-            shadow_pnl.append(float(r["r_multiple"]) if r["r_multiple"] is not None else 0.0)
-    n = max(len(shadow_pnl), 1)
-    wins = sum(1 for p in shadow_pnl if p > 0)
-    exp = sum(shadow_pnl) / n if shadow_pnl else 0.0
-    wr = wins / n * 100.0
-    dd = max((0.0 - min(shadow_pnl)) if shadow_pnl else 0.0, 0.0)
-    shadow = EvalReport(
-        pair=base.pair if base else "", tf=base.tf if base else "",
-        side=base.side if base else "", n_trades=len(shadow_pnl),
-        win_rate_pct=wr, expectancy_r=exp, profit_factor=1.0,
-        max_dd_pct=dd * 100.0, sharpe=0.0,
-        passes={"wr_gate": wr >= candidate_surface.winrate_gate_pct},
-    )
-    # baseline mirrors shadow's accounting from the same stored trades
-    base_wins = sum(1 for r in rows if r["win"])
-    bn = max(len(rows), 1)
-    base_wr = base_wins / bn * 100.0
-    base_exp = (sum(float(r["r_multiple"]) for r in rows if r["r_multiple"] is not None)
-                / bn) if rows else 0.0
-    baseline = EvalReport(
-        pair=shadow.pair, tf=shadow.tf, side=shadow.side, n_trades=len(rows),
-        win_rate_pct=base_wr, expectancy_r=base_exp, profit_factor=1.0,
-        max_dd_pct=base.max_dd_pct if base else 0.0, sharpe=0.0,
-        passes={"wr_gate": base_wr >= baseline_surface.winrate_gate_pct},
-    )
-    # Reuse Sentinel.ShadowComparison semantics via a tiny adapter
-    class _C:
-        baseline = baseline
-        shadow = shadow
-
-        @property
-        def shadow_not_worse(self):
-            return (self.shadow.expectancy_r >= self.baseline.expectancy_r
-                    and self.shadow.max_dd_pct <= self.baseline.max_dd_pct)
-
-        @property
-        def health_improved(self):
-            return self.shadow.health() > self.baseline.health()
-
-        @property
-        def promotable(self):
-            return self.shadow_not_worse and self.health_improved
-    return _C()
-
-
-def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_trades):
+def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_trades,
+                registry=None, daily_loss_pct=0.0, feed_frozen=False, equity=1000.0,
+                loss_book=None, monitor=None, exchange=None, guard=None):
     """Phase 12 — time-sensitive decision tick.
 
     Fetches the 1m (DECISION_TF) series + each structural context TF, builds an MTF
@@ -419,6 +510,22 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             contexts[tf] = c
     i = len(dec) - 1
     state = build_state_mtf(pair, dec, i, contexts)
+    # v0.0.7: fold cross-asset + MTF relational context into the decision state
+    try:
+        ctx = build_context_for(pair, dec, i, contexts)
+        state.btc_bias = ctx.btc_bias
+        state.btc_ret = ctx.btc_ret
+        state.dominance_delta = ctx.dominance_delta
+        state.risk_regime = ctx.risk_regime
+        state.alt_rs_btc = ctx.alt_rs_btc
+        state.alt_breadth = ctx.alt_breadth
+        state.ltf_bias = ctx.ltf_bias
+        state.mtf_bias = ctx.mtf_bias
+        state.htf_bias2 = ctx.htf_bias
+        state.mtf_confluence = ctx.mtf_confluence
+        state.pullback_to_anchor = ctx.pullback_to_anchor
+    except Exception as e:  # best-effort: never let context fetch break the loop
+        log.debug("context build failed for %s: %s", pair, e)
 
     # manage an existing position on this pair (any structural tf) by its 1m print
     key = None
@@ -432,65 +539,93 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                      (t.side == "SELL" and bar.h >= t.sl_price)
             if hit_tp:
                 _close(pair, k[1], k[2], t.tp_price, "TP", conn, lc, tel, kill,
-                       notifier, open_trades)
+                       notifier, open_trades, loss_book=loss_book)
             elif hit_sl:
                 _close(pair, k[1], k[2], t.sl_price, "SL", conn, lc, tel, kill,
-                       notifier, open_trades)
+                       notifier, open_trades, loss_book=loss_book)
             else:
                 key = k
             break
     if key is not None:
         return  # one open position per pair; wait for it to close
 
-    # kill-switch gate
-    tripped, reason = kill.check_global(daily_loss_pct=0.0, adl_rank=1, feed_frozen=False)
+    # kill-switch gate (real daily-loss + feed-health, doc 30 §7)
+    tripped, reason = kill.check_global(daily_loss_pct=daily_loss_pct,
+                                        adl_rank=1, feed_frozen=feed_frozen)
     if tripped:
         tel.health("kill_switch", "FAIL", detail=reason)
         notifier.notify_kill_switch(reason)
         return
 
-    # decide + open (PAPER) on the latest closed 1m bar
-    prelim = decide(state, surface)
+    # decide + open (PAPER) on the latest closed 1m bar — context-aware (v0.0.7)
+    rec = decide_ctx(state, surface)
+    if rec.decision != "ENTRY" or rec.side is None:
+        # WATCH/SKIP: report if the base 7-factor engine thought it was actionable
+        if rec.decision == "WATCH":
+            notifier.notify_decision(pair, DECISION_TF, "WATCH", rec.chosen_score,
+                                     rec.side or "-", "context gate / below threshold")
+        return
+    prelim = rec  # alias for the SL/TP derivation below
+    corr_id = f"{pair}-{DECISION_TF}-{int(time.time()*1000)}-{rec.side}"
     atr = state.atr or dec[i].c * state.atr_pct
     entry = dec[i].c
     sl = (entry + surface.sl_atr_mult * atr) if prelim.side == "SELL" else \
          (entry - surface.sl_atr_mult * atr)
     tp = (entry - surface.tp_atr_mult * atr) if prelim.side == "SELL" else \
          (entry + surface.tp_atr_mult * atr)
-    rec = decider.process(state, liquidity_ok=True, intraday_loss_pct=0.0,
-                          sl_price=sl, entry_price=entry, leverage=surface.max_leverage)
-    reason = "; ".join(rec.gate.reasons) if rec.gate else "two-layer gate"
+    # NOTE: `decide_ctx` already applied the 7-factor engine + relational boost + the
+    # hard context gate + the entry_threshold. The older DecisionOrchestrator two-layer
+    # gate (decider.process) is intentionally NOT re-run here — decide_ctx is authoritative
+    # for the scalping path. `rec` (from decide_ctx) carries side + chosen_score.
+    reason = "context-aware entry (7-factor + BTC/dominance/MTF confluence)"
 
-    # Phase 12 immediacy gate: only act when MTF-aligned (don't fight the HTF bias)
-    # and the spread is tight. This keeps entry_threshold at 0.90 — actionability
-    # comes from 1m cadence, NOT a looser bar.
-    if not state.mtf_aligned:
-        if rec.actionable:
-            notifier.notify_decision(pair, DECISION_TF, "WATCH", rec.scoring.chosen_score,
-                                     rec.side or "-", reason + " | MTF not aligned")
-        return
-    if rec.actionable:
-        notifier.notify_decision(pair, DECISION_TF, rec.decision, rec.scoring.chosen_score,
-                                 rec.side or "-", reason)
-    if not rec.actionable:
-        return
-    trade = lc.open(correlation_id=rec.correlation_id, pair=pair, tf=DECISION_TF,
-                    side=rec.side, entry_price=entry, size=1.0,
+    # --- hard live boundary: in LIVE mode this raises unless human-approved ---
+    if guard is not None:
+        guard.assert_entry_allowed(pair, DECISION_TF, rec.side)
+    # real risk-based sizing (doc 30 §3): 0.25% equity at the SL distance — replaces
+    # the previous hardcoded size=1.0, which silently ignored the risk engine.
+    info = (registry or SymbolRegistry()).get(pair)
+    sl_distance = abs(entry - sl)
+    qty = 1.0
+    if info is not None and sl_distance > 0 and entry > 0:
+        qty = size_position(equity=equity,
+                            risk_per_trade_pct=surface.risk_per_trade_pct,
+                            entry=entry, sl_price=sl, leverage=surface.max_leverage,
+                            info=info, max_position_notional_pct=surface.max_position_notional_pct)
+        qty = qty if qty > 0 else 1.0  # degenerate market -> fall back (skip), else minimal
+    trade = lc.open(correlation_id=corr_id, pair=pair, tf=DECISION_TF,
+                    side=rec.side, entry_price=entry, size=qty,
                     leverage=surface.max_leverage, sl_price=sl, tp_price=tp,
-                    decision_id=rec.id, spread_bps=state.spread_bps,
-                    regime=state.regime, scores=rec.scoring.sub_scores.as_dict())
+                    decision_id=corr_id, spread_bps=state.spread_bps,
+                    regime=state.regime, scores=rec.sub_scores.as_dict())
     open_trades[(pair, DECISION_TF, rec.side)] = trade
-    tel.exec_event(rec.correlation_id, pair, DECISION_TF, "FILL", order_type="LIMIT",
-                   side=rec.side, price=entry, qty=1.0, status="FILLED")
+    # REAL protective stop on the (simulated) exchange + hand the position to the
+    # PositionMonitor so SL/TP/maxhold/orphan are managed every tick (doc 30 §3, doc 32 L4).
+    sl_state = place_stop_loss(exchange, pair, rec.side, qty, sl) if exchange else None
+    if monitor is not None:
+        monitor.track(Position(
+            correlation_id=corr_id, symbol=pair, tf=DECISION_TF,
+            side=rec.side, qty=qty, entry_price=entry,
+            sl=sl_state or __import__("execution").StopLossState(
+                "CONDITIONAL", sl, "SELL" if rec.side == "BUY" else "BUY"),
+            tp_price=tp, opened_ts=time.time(),
+            sl_on_exchange=False,  # paper sim doesn't fill stops -> monitor polls mark
+        ))
+    tel.exec_event(corr_id, pair, DECISION_TF, "FILL", order_type="LIMIT",
+                   side=rec.side, price=entry, qty=qty, status="FILLED")
     notifier.notify_fill(pair, DECISION_TF, rec.side, entry, sl, tp, surface.max_leverage)
 
 
-def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier, open_trades):
+def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,
+           open_trades, loss_book=None):
     t = open_trades.pop((pair, tf, side), None)
     if t is None:
         return
     res = lc.close(t, exit_price=exit_price, close_reason=reason)
     kill.record_close(pair, tf, side, win=bool(res["win"]))
+    # accumulate realized loss for the daily-loss kill-switch (doc 30 §7)
+    if loss_book is not None and res["pnl_usd"] < 0:
+        loss_book["usd"] += -res["pnl_usd"]
     tel.exec_event(t.correlation_id, pair, tf, "CLOSE", side=side,
                    price=exit_price, status=reason)
     notifier.notify_close(pair, tf, side, exit_price, reason, res["r_multiple"],

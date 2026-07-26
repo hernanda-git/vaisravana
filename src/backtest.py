@@ -24,9 +24,13 @@ from evaluation import EvalReport, evaluate
 from marketdata import Candle
 from orchestrator import PaperOrchestrator
 
+# Honest fee model (doc 28 group E): the 1m "jump" cadence is a TAKER at entry
+# (marketable limit), TP is a maker limit, SL/MAXHOLD are taker. Previous harness
+# assumed maker entry (0.02%) — too optimistic. Defaults below are realistic VIP0.
 MAKER_FEE = 0.0002   # Binance USDⓈ-M VIP0 maker 0.02%
 TAKER_FEE = 0.0005   # VIP0 taker 0.05%
-MAX_HOLD_BARS = 1    # doc 30 §3: max-hold = one TF bar budget
+MAX_HOLD_BARS = 60   # HONEST default: up to 60 bars (≈1h on 1m) before MAXHOLD,
+                     # not a single next-bar gamble. Configurable per run.
 
 
 def split(candles: list[Candle], oos_frac: float = 0.3) -> tuple[list[Candle], list[Candle]]:
@@ -67,6 +71,10 @@ class BacktestHarness:
     `state_factory(candles, i) -> MarketState` builds the engine input per bar —
     injected so tests can use deterministic fixtures and the real system can use
     the full indicator stack without this module depending on it.
+
+    SL/TP are derived **inside** the orchestrator from the surface's ATR multipliers,
+    exactly as production does (so backtest == live logic). The only knobs here are
+    `max_hold_bars` (how many bars before MAXHOLD) and `fees` (entry, tp, exit).
     """
 
     def __init__(
@@ -74,10 +82,16 @@ class BacktestHarness:
         conn: sqlite3.Connection,
         state_factory,
         orchestrator: PaperOrchestrator | None = None,
+        surface=None,
+        max_hold_bars: int = MAX_HOLD_BARS,
+        fees: tuple[float, float, float] = (TAKER_FEE, MAKER_FEE, TAKER_FEE),
     ) -> None:
         self.conn = conn
         self.state_factory = state_factory
-        self.orch = orchestrator or PaperOrchestrator(conn)
+        self.orch = orchestrator or PaperOrchestrator(conn, surface)
+        self.max_hold_bars = max_hold_bars
+        # (entry_fee, tp_fee, exit_fee) — entry is TAKER for the 1m jump cadence
+        self.entry_fee, self.tp_fee, self.exit_fee = fees
 
     def run(self, pair: str, tf: str, candles: list[Candle]) -> ReplayStats:
         stats = ReplayStats(pair=pair, tf=tf, candles=len(candles))
@@ -98,7 +112,7 @@ class BacktestHarness:
 
             # walk forward until TP/SL/MAXHOLD — outcome from REAL candle extremes
             exit_price, reason = None, None
-            for k in range(i + 1, min(i + 1 + MAX_HOLD_BARS, len(candles))):
+            for k in range(i + 1, min(i + 1 + self.max_hold_bars, len(candles))):
                 bar = candles[k]
                 if side == "BUY":
                     # conservative: if both touched in one bar, assume SL first
@@ -116,12 +130,12 @@ class BacktestHarness:
                         exit_price, reason = tp, "TP"
                         break
             if reason is None:
-                k = min(i + MAX_HOLD_BARS, len(candles) - 1)
+                k = min(i + self.max_hold_bars, len(candles) - 1)
                 exit_price, reason = candles[k].c, "MAXHOLD"
 
-            # fees: LIMIT entry (maker) + exit (TP=maker, SL/MAXHOLD=taker)
-            exit_fee = MAKER_FEE if reason == "TP" else TAKER_FEE
-            stats.fees_usd += entry_price * MAKER_FEE + exit_price * exit_fee
+            # honest fees: entry taker (1m jump), TP maker, SL/MAXHOLD taker
+            exit_fee = self.tp_fee if reason == "TP" else self.exit_fee
+            stats.fees_usd += entry_price * self.entry_fee + exit_price * exit_fee
 
             self.orch.close_trade(pair, tf, side, exit_price=exit_price, reason=reason)
             if reason == "TP":

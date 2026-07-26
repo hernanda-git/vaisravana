@@ -56,14 +56,14 @@ class ParameterSurface(BaseModel):
 
     weights: Weights = Field(default_factory=Weights)
 
-    entry_threshold: float = Field(default=0.90, ge=0.85, le=0.92)
-    watch_threshold: float = Field(default=0.80, ge=0.78, le=0.85)
+    entry_threshold: float = Field(default=0.86, ge=0.85, le=0.92)
+    watch_threshold: float = Field(default=0.78, ge=0.78, le=0.85)
 
     sl_atr_mult: float = Field(default=1.0, ge=0.8, le=2.0)
-    tp_atr_mult: float = Field(default=1.05, ge=1.0, le=2.0)
+    tp_atr_mult: float = Field(default=1.25, ge=1.0, le=2.0)
 
-    max_leverage: int = Field(default=2, ge=1, le=3)
-    cooldown_after_loss: int = Field(default=10, ge=0, le=60)
+    max_leverage: int = Field(default=3, ge=1, le=3)
+    cooldown_after_loss: int = Field(default=5, ge=0, le=60)
 
     daily_loss_limit_pct: float = Field(default=0.5, ge=0.3, le=2.0)
     risk_per_trade_pct: float = Field(default=0.25, ge=0.10, le=0.50)

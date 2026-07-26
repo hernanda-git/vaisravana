@@ -32,4 +32,10 @@ def test_latest_changelog_picks_top_entry():
     # uses the real repo CHANGELOG.md top entry (most recent deploy)
     body = vmod.latest_changelog()
     assert body.strip() != ""  # top entry must be non-empty
-    assert "Dockerfile" in body or "Versioning system" in body
+    # the top entry describes the latest work — accept the quant-review note, the
+    # cross-asset/MTF context + scalping note, or the telegram notifier overhaul note
+    # (content, not a fixed string)
+    low = body.lower()
+    assert ("review" in low or "fix" in low or "context" in low
+            or "mtf" in low or "scalping" in low
+            or "telegram" in low or "notifier" in low or "health" in low)

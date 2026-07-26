@@ -49,6 +49,18 @@ class MarketState:
     atr_pct: float = 0.01
     # multi-tf
     mtf_aligned: bool = False
+    # --- cross-asset & MTF relational context (v0.0.7, doc 40 §1) ---
+    btc_bias: str = "neutral"          # bullish/bearish/neutral — BTC leader
+    btc_ret: float = 0.0
+    dominance_delta: float = 0.0        # <0 alt bid (risk-on) / >0 BTC bid (risk-off)
+    risk_regime: str = "neutral"
+    alt_rs_btc: float = 0.0             # pair return minus BTC return
+    alt_breadth: float = 0.5            # fraction of alt basket above EMA
+    ltf_bias: str = "neutral"           # low TF (1-5m)
+    mtf_bias: str = "neutral"           # mid TF (15m-1h)
+    htf_bias2: str = "neutral"          # high TF (4h-1d) — explicit 3rd layer
+    mtf_confluence: bool = False        # LTF/MF/HTF agree
+    pullback_to_anchor: bool = False    # LTF retraced into HTF bias then resumed
     # market data health
     spread_bps: float = 3.0
     funding_ok: bool = True
@@ -150,6 +162,51 @@ def funding_oi_score(s: MarketState) -> float:
         sc -= 0.4
     if s.adl_rank >= 4:
         sc -= 0.3
+    return _clamp(sc)
+
+
+def crossasset_score(s: MarketState) -> float:
+    """Cross-asset relational factor (v0.0.7). 0..1 confirmation of BTC leader + risk regime.
+
+    A long is supported when BTC is bullish and dominance is falling (alt bid / risk-on);
+    a short is supported when BTC is bearish and dominance is rising (risk-off). Neutral /
+    mixed context scores ~0.5 (no penalty, no bonus) — the factor only ADDS conviction
+    when the market's rudder agrees with the trade (doc 40 §1).
+    """
+    sc = 0.5
+    # BTC leader alignment
+    if s.btc_bias == "bullish":
+        sc += 0.15
+    elif s.btc_bias == "bearish":
+        sc -= 0.15
+    # risk regime (dominance delta proxy)
+    if s.risk_regime == "bullish":       # alt bid / risk-on
+        sc += 0.1
+    elif s.risk_regime == "bearish":     # BTC bid / risk-off
+        sc -= 0.1
+    # alt relative strength: pair outperforming BTC is healthier for a long
+    sc += _clamp(s.alt_rs_btc * 5.0) * 0.1
+    # breadth: broad participation lifts conviction
+    sc += (s.alt_breadth - 0.5) * 0.2
+    return _clamp(sc)
+
+
+def mtf_relational_score(s: MarketState) -> float:
+    """MTF relational factor (v0.0.7). 0..1 — does LTF/MF/HTF STACK in the trade's favor?
+
+    The scalping edge is not "aligned"; it is "HTF sets bias, MF confirms, LTF pulls
+    back INTO that bias (anchor) then resumes". We reward confluence + pullback-to-anchor
+    (the actual entry trigger) and penalize an opposed stack (doc 40 §1, user brief).
+    """
+    sc = 0.4
+    if s.mtf_confluence:
+        sc += 0.25
+    if s.pullback_to_anchor:
+        sc += 0.2
+    # explicit 3-layer agreement
+    layers = [b for b in (s.ltf_bias, s.mtf_bias, s.htf_bias2) if b != "neutral"]
+    if layers and len(set(layers)) == 1:
+        sc += 0.15
     return _clamp(sc)
 
 

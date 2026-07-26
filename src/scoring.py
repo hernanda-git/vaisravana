@@ -13,10 +13,12 @@ from engines import (
     MarketState,
     _FACTORS,
     atr_score,
+    crossasset_score,
     funding_oi_score,
     liquidity_score,
     liquidity_score_bear,
     momentum_score,
+    mtf_relational_score,
     regime_score,
     structure_score,
     volume_score,
@@ -126,3 +128,49 @@ def decide(s: MarketState, surface: ParameterSurface | None = None) -> Decision:
         confidence_pct=round(chosen * 100.0, 2),
         sub_scores=compute_subscores(s),
     )
+
+
+def decide_ctx(s: MarketState, surface: ParameterSurface | None = None) -> Decision:
+    """Context-aware decision (v0.0.7): the 7-factor `decide` PLUS cross-asset + MTF
+    relational confirmation.
+
+    The relational factors are applied as a MODULATOR on the base score (preserving the
+    doc-21 Σweights=1.0 invariant) and as a HARD gate when the trade fights the market's
+    rudder (BTC downtrend + risk-off long, etc.). The base 7-factor logic is unchanged,
+    so all existing tests on `decide()` keep passing.
+    """
+    surface = surface or default_surface()
+    base = decide(s, surface)
+    if base.decision != "ENTRY" or base.side is None:
+        return base  # nothing to confirm/block
+
+    from marketcontext import MarketContext
+    ctx = MarketContext(
+        btc_bias=s.btc_bias, btc_ret=s.btc_ret,
+        dominance_delta=s.dominance_delta, risk_regime=s.risk_regime,
+        alt_rs_btc=s.alt_rs_btc, alt_breadth=s.alt_breadth,
+        ltf_bias=s.ltf_bias, mtf_bias=s.mtf_bias, htf_bias=s.htf_bias2,
+        mtf_confluence=s.mtf_confluence, pullback_to_anchor=s.pullback_to_anchor,
+    )
+    boost = ctx.ctx_boost()
+    allowed, reason = ctx.ctx_gate_open(base.side)
+    if not allowed:
+        # context hard-blocks the entry -> downgrade to WATCH with a note
+        return Decision(
+            long_score=base.long_score, short_score=base.short_score,
+            side=None, decision="WATCH",
+            chosen_score=round(base.chosen_score * 0.9, 4),
+            confidence_pct=round(base.chosen_score * 90.0, 2),
+            sub_scores=base.sub_scores,
+        )
+    # apply relational boost (clamped) — a confirmed A+ setup can slightly exceed 0.90
+    new_score = max(0.0, min(1.0, base.chosen_score * boost))
+    return Decision(
+        long_score=base.long_score, short_score=base.short_score,
+        side=base.side,
+        decision="ENTRY" if new_score >= surface.entry_threshold else "WATCH",
+        chosen_score=round(new_score, 4),
+        confidence_pct=round(new_score * 100.0, 2),
+        sub_scores=base.sub_scores,
+    )
+

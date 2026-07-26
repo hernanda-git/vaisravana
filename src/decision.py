@@ -116,7 +116,7 @@ class DecisionOrchestrator:
             pair=state.symbol,
             tf=state.tf,
             decision=final_decision,
-            side=scoring.side if final_decision == "ENTRY" else scoring.side,
+            side=scoring.side if final_decision == "ENTRY" else None,
             confidence_pct=scoring.confidence_pct,
             gate=gate_result,
             scoring=scoring,

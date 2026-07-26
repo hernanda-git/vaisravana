@@ -1,6 +1,8 @@
 # Implementation Status — 2026-07-26
 
-All 10 plan phases implemented, tested, and pushed. **105 tests passing** (all mocked/offline; no live calls anywhere in the test suite).
+All 10 plan phases implemented, tested, and pushed. **125 tests passing** (all mocked/offline; no live calls anywhere in the test suite).
+
+See also: [docs/40-quant-review.md](docs/40-quant-review.md), [docs/41-improvements.md](docs/41-improvements.md), [docs/42-context-mtf-scalping.md](docs/42-context-mtf-scalping.md), [docs/43-telegram-notifier.md](docs/43-telegram-notifier.md).
 
 ## Phase map → code
 
@@ -39,7 +41,7 @@ All 10 plan phases implemented, tested, and pushed. **105 tests passing** (all m
 ## Runbook
 
 ```bash
-.venv/Scripts/python -m pytest                       # 105 tests
+.venv/Scripts/python -m pytest                       # 125 tests
 .venv/Scripts/python scripts/fetch_klines_via_gateway.py BTCUSDT ETHUSDT  # real data (via Fly)
 .venv/Scripts/python scripts/run_backtest_real.py    # real-data replay + report
 .venv/Scripts/python scripts/run_backtest_demo.py    # synthetic pipeline smoke
@@ -54,3 +56,30 @@ All 10 plan phases implemented, tested, and pushed. **105 tests passing** (all m
 - Immediacy gate: only act when `mtf_aligned` (don't fight the HTF bias). Entry bar
   stays 0.90; actionability comes from cadence, not a looser threshold.
 - 1m real-data backtest + 4 cadence tests added. Live: deciding every minute, tf=1m.
+
+## Phase 14 — Hard mode boundary + honest shadow replay (2026-07-26)
+- `src/mode.py`: `ModeGuard` enforces PAPER at construction + every entry; `PaperSimExchange`
+  for deterministic paper fills. Live path requires explicit human approval.
+- `src/shadow.py`: honest shadow replay that varies TP/SL/threshold against real bars so
+  the Sentinel can't reward-hack by re-weighting.
+- `src/backtest.py`: taker-fee model (VIP0) + multi-bar exits + OOS split; honest
+  expectancy/profit-factor reporting.
+- 13 tests added (test_phase14_mode_shadow).
+
+## Phase 15 — Cross-asset + MTF relational context (2026-07-26)
+- `src/marketcontext.py`: BTC leader bias, BTC.d/risk regime, alt relative strength +
+  breadth, explicit LTF/MF/HTF biases, confluence + pullback-to-anchor.
+- `decide_ctx()` = 7-factor `decide()` + relational boost + hard entry gate (doc-21
+  Σweights=1.0 invariant preserved).
+- Scalping surface tuned (within doc-21 bounds): entry 0.90→0.86, tp_atr 1.05→1.25,
+  max_leverage 2→3, cooldown 10→5.
+- 4 tests added (test_phase15_context).
+
+## Phase 16 — Telegram notifier fix (2026-07-26, v0.0.8)
+- Root cause: MarkdownV1 + escaped version → silent plain-text fallback (literal
+  `v0\.0\.4`). Switched to **MarkdownV2** with correct escaper; version passed RAW.
+- Removed em-dashes from all alert cards; added explicit on-deploy **health-check
+  heartbeat** (`notify_health_check`) so liveness is confirmed without waiting for a trade.
+- Cleaner, elegant startup + deploy/changelog cards (Bahasa Indonesia, brand Vessavaṇa).
+- 3 tests added/updated (test_phase10b_deploy).
+

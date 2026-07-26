@@ -7,15 +7,16 @@
 ### A stability-first, high-win-rate crypto-futures trading system
 
 [![Status](https://img.shields.io/badge/status-paper--phase%20implemented-blue)](docs/34-implementation-status.md)
-[![Tests](https://img.shields.io/badge/tests-105%20passing-brightgreen)](docs/34-implementation-status.md)
+[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen)](docs/34-implementation-status.md)
 [![Win Rate Target](https://img.shields.io/badge/win%20rate-%E2%89%A585%25-brightgreen)](docs/30-concrete-spec.md)
 [![Drawdown](https://img.shields.io/badge/max%20drawdown-%3C%203%25-orange)](docs/25-safety-shadow-rollback.md)
 [![Timeframes](https://img.shields.io/badge/timeframes-5m%20%7C%2010m%20%7C%2015m-9cf)](docs/30-concrete-spec.md)
 [![Exchange](https://img.shields.io/badge/exchange-Binance%20Futures-yellow)](docs/30-concrete-spec.md)
+[![Mode](https://img.shields.io/badge/mode-PAPER%20(guarded)-blue)](docs/41-improvements.md)
 [![Signals](https://img.shields.io/badge/signals-none-lightgrey)](#no-signals)
 [![Logging](https://img.shields.io/badge/logging-100%25%20of%20trades-success)](docs/22-telemetry.md)
 [![License](https://img.shields.io/badge/license-CC0--1.0%20art-informational)](#attribution)
-[![Docs](https://img.shields.io/badge/docs-33%20files-important)](ARCHITECTURE.md)
+[![Docs](https://img.shields.io/badge/docs-35%20files-important)](ARCHITECTURE.md)
 
 *Named after **Vaiśravaṇa (वैश्रवण)** — Buddhist deity of wealth and guardian of the northern quarter.
 The system's prime directive is the **preservation** of capital through stable, high-probability execution.*
@@ -25,11 +26,18 @@ The system's prime directive is the **preservation** of capital through stable, 
 ---
 
 > [!NOTE]
-> **Design docs + working implementation.** 33 interlinked design documents *plus* a tested
-> Python implementation (`src/`, 105 offline tests): 9 engines → two-layer gate → paper
+> **Design docs + tested implementation.** 35 interlinked design documents *plus* a tested
+> Python implementation (`src/`, 118 offline tests): 9 engines → two-layer gate → paper
 > execution → evaluation → bounded Sentinel → promotion gate (human-approved) → monitoring.
 > Status: [docs/34-implementation-status.md](docs/34-implementation-status.md). PAPER-only —
-> no live path exists without explicit human approval.
+> no live path exists without explicit human approval (now enforced structurally by
+> [docs/41-improvements.md](docs/41-improvements.md)).
+>
+> ⚠️ **Quant review (2026-07-26):** [docs/40-quant-review.md](docs/40-quant-review.md) found
+> a live-vs-design gap — several safety/execution features lived in `src/` but were **not
+> wired into the running bot**. The highest-value gaps are now closed (real kill-switch,
+> real risk sizing, real structure/liquidity flags); real stop-loss placement and a hard
+> mode boundary remain P0. Read the review before trusting the documented safety posture.
 
 ## ✨ Why Vaiśravaṇa
 
@@ -193,7 +201,11 @@ and [`docs/25-safety-shadow-rollback.md`](docs/25-safety-shadow-rollback.md).
 | File | Role |
 |------|------|
 | [**ARCHITECTURE.md**](ARCHITECTURE.md) | **Master design** — goals, principles, component map, MT shadow engine, win-rate strategy |
-| [**docs/33-paper.md**](docs/33-paper.md) | **Technical Paper** — abstract, architecture, no-signaling, logging, Sentinel, risk |
+|| [**docs/33-paper.md**](docs/33-paper.md) | **Technical Paper** — abstract, architecture, no-signaling, logging, Sentinel, risk |
+|| [**docs/40-quant-review.md**](docs/40-quant-review.md) | **Expert crypto-quant review** — critical findings, fixes applied, improvement roadmap |
+| [**docs/41-improvements.md**](docs/41-improvements.md) | Improvements from the expert review (mode boundary, real stops, honest backtest, shadow) |
+| [**docs/42-context-mtf-scalping.md**](docs/42-context-mtf-scalping.md) | **Cross-asset (BTC/BTC.d/ALT) + MTF relational context + scalping tuning** |
+| [**docs/43-telegram-notifier.md**](docs/43-telegram-notifier.md) | **Telegram notifier fix: MarkdownV2, clean version, no em-dash, health-check heartbeat** |
 
 </details>
 
@@ -281,10 +293,14 @@ Regime + HTF bias (1h/4h) → pick direction:
 ## 📌 Status
 
 > [!CAUTION]
-> **Not financial advice.** This is a research/design knowledge base. Trading crypto
-> futures carries total-loss risk. The system is documentation-complete but **not yet
-> deployed**. Backtesting, fee-tier calibration, and the concrete DB/language choice remain
-> open implementation decisions (tracked in [`docs/31-glossary.md`](docs/31-glossary.md)).
+> **Not financial advice.** This is a research/design knowledge base + deployed PAPER
+> trading bot. Trading crypto futures carries total-loss risk. The system is
+> **code-complete and PAPER-deployed on Fly.io** (no live orders; promotion to live
+> requires human approval). It is validated by 125 offline tests, a real-data backtest,
+> and an honest shadow replay — but has **not** met the 200-trade ≥85% WR promotion
+> stats (an operating milestone, not a code claim). Live cutover, fee-tier calibration,
+> and the concrete DB choice remain open decisions (tracked in
+> [`docs/31-glossary.md`](docs/31-glossary.md)).
 
 ---
 

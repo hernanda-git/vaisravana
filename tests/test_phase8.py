@@ -91,9 +91,10 @@ def _simulate(conn, n_win, n_loss, side="BUY"):
         t = lc.open(f"c{side}{i}", "BTCUSDT", "5m", side, entry_price=100.0,
                     size=1.0, leverage=2.0,
                     sl_price=99.0 if side == "BUY" else 101.0,
-                    tp_price=101.05 if side == "BUY" else 98.95)
+                    tp_price=101.25 if side == "BUY" else 98.75)
+
         if o == "W":
-            lc.close(t, exit_price=101.05 if side == "BUY" else 98.95, close_reason="TP")
+            lc.close(t, exit_price=101.25 if side == "BUY" else 98.75, close_reason="TP")
         else:
             lc.close(t, exit_price=99.0 if side == "BUY" else 101.0, close_reason="SL")
 
@@ -146,10 +147,10 @@ def test_orchestrator_full_cycle_decision_to_eval(conn):
     orch = PaperOrchestrator(conn)
     out = orch.on_candle_close(_bull(), entry_price=100.0, atr=1.0)
     assert out.record.actionable and out.opened is not None
-    # SL/TP derived from ATR multipliers (doc 21: sl 1.0×ATR, tp 1.05×ATR)
+    # SL/TP derived from ATR multipliers (doc 21: sl 1.0×ATR, tp 1.25×ATR scalping tune)
     assert out.opened.sl_price == pytest.approx(99.0)
-    assert out.opened.tp_price == pytest.approx(101.05)
-    rep = orch.close_trade("BTCUSDT", "5m", "BUY", exit_price=101.05, reason="TP")
+    assert out.opened.tp_price == pytest.approx(101.25)
+    rep = orch.close_trade("BTCUSDT", "5m", "BUY", exit_price=101.25, reason="TP")
     assert rep.n_trades == 1 and rep.win_rate_pct == 100.0
     # full audit trail exists
     assert conn.execute("SELECT COUNT(*) c FROM decisions_log").fetchone()["c"] == 1
