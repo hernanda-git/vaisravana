@@ -106,7 +106,7 @@ and side-effect free.
 
 ---
 
-## Phase 3 — Two-Layer Gate + Decision Record (safety first)
+## Phase 3 — Two-Layer Gate + Decision Record (safety first)  ✅ DONE (2026-07-26)
 
 **Objective:** Implement Gate A (cheap pre-scoring) + Gate B (hard clamp) from `doc 30` §3 /
 `doc 32` Lesson 1, and persist every decision to `decisions_log`.
