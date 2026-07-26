@@ -27,7 +27,7 @@ The system's prime directive is the **preservation** of capital through stable, 
 
 > [!NOTE]
 > **Design docs + tested implementation.** 35 interlinked design documents *plus* a tested
-> Python implementation (`src/`, 118 offline tests): 9 engines → two-layer gate → paper
+> Python implementation (`src/`, 125 offline tests): 9 engines → two-layer gate → paper
 > execution → evaluation → bounded Sentinel → promotion gate (human-approved) → monitoring.
 > Status: [docs/34-implementation-status.md](docs/34-implementation-status.md). PAPER-only —
 > no live path exists without explicit human approval (now enforced structurally by
@@ -64,31 +64,52 @@ The system's prime directive is the **preservation** of capital through stable, 
 
 ## 🏛️ Architecture at a Glance
 
+Two cooperating processes share one telemetry store: the **Trader** (PAPER, deployed on
+Fly) makes decisions every minute; the **Sentinel** (offline, propose-only by default)
+reviews results and may promote a *bounded* parameter change via a genuine shadow replay.
+
 ```mermaid
 flowchart TB
-    subgraph EX["Binance USDⓈ-M — 5m / 10m / 15m (all USDT perps)"]
+    subgraph EXT["🌐 Market — Binance USDⓈ-M (fetched via Fly sin)"]
+        MKT["Klines: 1m (DECISION_TF) + 5m/15m (MTF ctx)<br/>+ BTC / BTC.d / alt basket (cross-asset)"]
     end
-    EX --> TRADER
 
-    subgraph TRADER["🤖 VAIŚRAVAṆA-TRADER (active)"]
+    MKT -->|fetch_klines| BOOT
+
+    subgraph TRADER["🤖 VAIŚRAVAṆA-TRADER — PAPER loop (bot_paper.run)"]
         direction TB
-        E1[Regime Detector] --> E2[Market Structure]
-        E2 --> E3[Liquidity]
-        E3 --> E4[Candle & PA]
-        E4 --> E5[Volume]
-        E5 --> E6[Volatility / ATR]
-        E6 --> E7[Multi-TF]
-        E7 --> E8[Risk Manager]
-        E8 --> E9[Scoring Engine]
-        E9 --> R10{{"Reasoning (5W1H)"}}
-        R10 -->|ENTRY| EXEC[Execution: LIMIT + validate/repair]
+        BOOT["Boot: init_db → load_surface → reload open positions<br/>→ ModeGuard(paper) → PaperSimExchange → PositionMonitor<br/>→ notify_startup · notify_deploy · notify_health_check"]
+
+        BOOT --> LOOP["while True (every CYCLE_S=60s)"]
+
+        subgraph TICK["_decide_tick (per pair, per minute)"]
+            direction TB
+            F["fetch 1m + 5m/15m klines"] --> S
+            S["build_state_mtf → 7-factor MarketState<br/>+ build_context_for: BTC bias, BTC.d/risk,<br/>alt RS/breadth, LTF/MF/HTF, confluence"] --> KS
+            KS{{"KillSwitch.check_global<br/>(daily-loss 0.5% · feed-frozen · ADL)?"}} -->|tripped| KILL["notify_kill_switch → return"]
+            KS -->|ok| DEC["decide_ctx(state, surface)<br/>7-factor decide + relational BOOST + HARD context GATE"]
+            DEC -->|"WATCH/SKIP"| SKIP["notify_decision(WATCH)"]
+            DEC -->|"ENTRY + side"| SZ["size_position (0.25% equity @ SL dist, lev 3×)"]
+            SZ --> GUARD{{"ModeGuard.assert_entry_allowed?<br/>(paper → OK; live → human gate)"}}
+            GUARD -->|paper| OPEN["lc.open → place_stop_loss (sim)<br/>→ monitor.track → notify_fill"]
+        end
+
+        LOOP --> TICK
+        LOOP --> PRICE["exchange.set_price(latest 1m close)"]
+
+        subgraph LIVE["PositionMonitor.tick() — every cycle"]
+            direction TB
+            MK["mark-price SL/TP check (1m extremes)<br/>+ max-hold + orphan"] --> CLOSE["lc.close → kill.record_close<br/>→ notify_close (PnL R)"]
+        end
+        PRICE --> LIVE
+        LIVE --> EVAL["evaluate() per (pair,tf,side)<br/>≥20 trades & all_pass → notify_promotion"]
+
+        TICK -.->|"correlation_id"| TL
+        LIVE -.->|"correlation_id"| TL
     end
 
-    EXEC -->|fill| TL[("trade_logs")]
-    TRADER -.->|telemetry| TL
-
-    subgraph STORE["🗄️ Telemetry Store"]
-        TL
+    subgraph STORE["🗄️ Telemetry Store (SQLite /data/vaisravana.db)"]
+        TL[("trade_logs + decisions_log")]
         DL[decisions_log]
         RL[results_log]
         EE[exec_events]
@@ -97,21 +118,57 @@ flowchart TB
 
     STORE -->|read| SENT
 
-    subgraph SENT["🔧 VAIŚRAVAṆA-SENTINEL (correction)"]
+    subgraph SENT["🔧 SENTINEL — bounded self-improvement (research_loop, daemon)"]
         direction TB
-        S1[REASON 5W1H] --> S2[EVALUATE]
-        S2 --> S3[REVIEW]
-        S3 --> S4[CORRECT → shadow]
-        S4 --> S5[PROMOTE]
-        S5 --> S6[DOCUMENT → chronicle]
+        R1["_shadow_replay: evaluate(trade_logs)<br/>+ FP/FN (ENTRY→SL cases)"] --> R2["LLMResearcher.propose (±10%, ≤4 edits)"]
+        R2 --> R3["Sentinel.cycle → shadow_compare<br/>(re-simulate pipeline on raw candles)"]
+        R3 -->|"shadow ≥ baseline & health↑"| R4["PROMOTE → persist surface.json"]
+        R3 -->|no| R5["ROLLBACK"]
     end
 
-    SENT -.->|bounded param edits| TRADER
+    SENT -.->|"bounded param edits only"| TRADER
 ```
 
-> The **9 engines + 1 reasoning layer** are detailed in [`docs/11-bot-architecture.md`](docs/11-bot-architecture.md)
-> and [`docs/29-dynamic-reasoning-5w1h.md`](docs/29-dynamic-reasoning-5w1h.md).
-> The master design lives in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+> **Key invariant (doc 21):** the Sentinel edits *only* the bounded `ParameterSurface`
+> (weights, thresholds, SL/TP multipliers, leverage, cooldown) — never engine logic.
+> Live trading is structurally impossible without `promotion_gate(human_approved=True)`
+> (enforced by `ModeGuard`). The Trader is **PAPER**: every fill/stop is simulated on
+> `PaperSimExchange`, and the `PositionMonitor` manages SL/TP/max-hold from mark price.
+
+### End-to-end walkthrough (one decision cycle)
+
+1. **Boot** (`bot_paper.run`): opens the SQLite store, loads the persisted `ParameterSurface`
+   (or defaults), reloads any open positions from `trade_logs` (restart-safe), builds the
+   `ModeGuard` (PAPER → `PaperSimExchange`), and fires the **startup + deploy + health-check**
+   Telegram cards (doc 43). If `VAISRAVANA_LLM != off`, a daemon `research_loop` thread starts.
+2. **Per minute, per pair** (`_decide_tick`):
+   - Fetch the latest **1m** (decision TF) candles + **5m/15m** (MTF context) + the
+     cross-asset basket (BTC leader, BTC.d risk regime, alt RS/breadth).
+   - `build_state_mtf` → a 7-factor `MarketState`; `build_context_for` folds the
+     cross-asset/MTF relational context into it.
+   - **Kill-switch gate**: trip on daily loss ≥ 0.5%, frozen feed, or ADL ≥ 4 → notify + skip.
+   - `decide_ctx` = 7-factor `decide()` **+ relational boost (clamped)** **+ hard context gate**
+     (don't fight BTC-bearish / risk-off; require LTF/MF/HTF confluence or pullback-to-anchor).
+     `Σweights = 1.0` is preserved (doc 21) — context only *modulates*, never adds a new weight.
+   - If **ENTRY + side**: `size_position` (0.25% equity at the SL distance, leverage 3×) →
+     `lc.open` → `place_stop_loss` on the sim exchange → `monitor.track` → `notify_fill`.
+     If **WATCH/SKIP**: a `notify_decision` is sent (so you see *why* it sat out).
+3. **Every cycle** (`PositionMonitor.tick`): the latest 1m close is pushed to the sim exchange;
+   the monitor checks mark-price SL/TP, max-hold, and orphan positions, then `lc.close`,
+   records the daily-loss book, and `notify_close` (with R-multiple PnL).
+4. **Every 30 min**: `_report_status` evaluates each (pair,tf,side) and posts a summary card;
+   when a series reaches ≥20 trades and passes all gates, `notify_promotion` flags it
+   **SHADOW READY — needs human approval to go live**.
+5. **Sentinel (background)**: reads `trade_logs`, builds FP/FN cases, proposes a bounded
+   surface change, and only promotes if a **genuine shadow replay** (`shadow_compare` on raw
+   candles) beats the baseline. Promoted surfaces are persisted to `surface.json` and reloaded
+   on the next restart.
+
+The **9 engines + 1 reasoning layer** are detailed in
+[`docs/11-bot-architecture.md`](docs/11-bot-architecture.md) and
+[`docs/29-dynamic-reasoning-5w1h.md`](docs/29-dynamic-reasoning-5w1h.md). The master design
+lives in [`ARCHITECTURE.md`](ARCHITECTURE.md). Cross-asset/MTF context is in
+[`docs/42-context-mtf-scalping.md`](docs/42-context-mtf-scalping.md).
 
 ---
 
@@ -180,12 +237,12 @@ and [`docs/25-safety-shadow-rollback.md`](docs/25-safety-shadow-rollback.md).
 
 | Guard | Value |
 |-------|-------|
-| Max leverage | **2×** (hard cap) |
+| Max leverage | **3×** (hard cap, tuned for scalping; doc-21 bounds) |
 | Daily loss limit | **0.5%** → kill-switch |
-| Risk per trade | **0.25%** of equity |
+| Risk per trade | **0.25%** of equity (real `size_position`, not hardcoded) |
 | Global live pairs cap | **5** |
-| Max hold | = trade timeframe (5/10/15m) |
-| Kill switches | ADL rank · funding spike · maintenance · frozen feed · black-swan |
+| Max hold | 60 bars (1m) / trade timeframe |
+| Kill switches | daily-loss · ADL rank · funding spike · maintenance · frozen feed · black-swan |
 
 > [!WARNING]
 > The **+85% win-rate is a gate, not a guarantee.** Pair/timeframe combinations that cannot
@@ -276,9 +333,9 @@ Regime + HTF bias (1h/4h) → pick direction:
 | Volatility (ATR) | 5% |
 | Funding / OI | 5% |
 
-- **Score > 0.90** → Entry (A+ confluence, tuned for ≥85% WR)
-- **0.80 – 0.90** → Watchlist
-- **< 0.80** → Skip
+- **Score > 0.86** → Entry (A+ confluence, tuned for ≥85% WR; relationally gated by `decide_ctx`)
+- **0.78 – 0.86** → Watchlist
+- **< 0.78** → Skip
 
 ---
 
@@ -304,24 +361,41 @@ Regime + HTF bias (1h/4h) → pick direction:
 
 ---
 
-## 💻 Code (Phase 0 — scaffolding)
+## 💻 Code (Phase 0 → 16, PAPER-deployed)
 
-The design is being implemented in Python 3.11 (pytest + pydantic, stdlib `sqlite3`).
+Implemented in Python 3.11 (pytest + pydantic + stdlib `sqlite3`), deployed on Fly.io as a
+PAPER bot. The full module map:
 
 ```text
-src/config.py   ParameterSurface — Sentinel-editable params (doc 21) w/ bounds + Σweights=1.0
-src/db.py       init_db() — telemetry schema verbatim from doc 30 §4 (5 tables)
-tests/          pytest suite — TDD per phase (11 passing)
+src/config.py        ParameterSurface — Sentinel-editable params (doc 21) w/ bounds + Σweights=1.0
+src/db.py            init_db() — telemetry schema verbatim from doc 30 §4 (5 tables)
+src/engines.py       9 engines: 7 factor sub-scores + dual LONG/SHORT scoring + cross-asset/MTF
+src/scoring.py       decide() + decide_ctx() (7-factor + relational boost + hard context gate)
+src/marketcontext.py cross-asset + MTF relational context (BTC bias, BTC.d risk, alt RS/breadth)
+src/decision.py      DecisionOrchestrator — two-layer gate → decisions_log
+src/execution.py     tick/step filter rounding, size_position, validate/repair, OrderManager, SL
+src/monitor.py       PositionMonitor — SL/TP/max-hold/orphan from mark price
+src/mode.py          ModeGuard + PaperSimExchange — hard PAPER/live boundary
+src/shadow.py        honest shadow replay (shadow_compare) for the Sentinel
+src/backtest.py      HONEST backtest harness (taker fees, OOS split, expectancy/PF)
+src/lifecycle.py     Trade lifecycle + rolling win/loss per (pair,tf,side)
+src/evaluation.py    per-(pair,tf,side) evaluation + composite health (anti reward-hack)
+src/sentinel.py      bounded self-improvement loop (propose → shadow → promote/rollback → chronicle)
+src/safety.py        kill-switches + promotion gate
+src/telemetry.py     central telemetry writer (fail-loud)
+src/telegram_bot.py  Telegram notifier (HTML cards, health-check heartbeat, doc 43)
+scripts/bot_paper.py deployable PAPER loop (Fly entrypoint)
+scripts/deploy.py    versioned Fly deploy (bump → changelog → tag → push → flyctl deploy)
+tests/               pytest suite — 125 passing (all mocked/offline)
 ```
 
 ```bash
 uv venv && uv pip install -r <(uv pip compile pyproject.toml)   # or: uv pip install pydantic pytest
-.venv/Scripts/python -m pytest                                  # 11 passed
+.venv/Scripts/python -m pytest                                  # 125 passed
 ```
 
-> **Status:** Phase 0 (skeleton) done. Phases 1–10 per
-> [`.hermes/plans/2026-07-26_113000-vaisravana-implementation.md`](.hermes/plans/2026-07-26_113000-vaisravana-implementation.md).
-> No live capital until the §6 promotion gate is passed on unreal.
+> **Status:** All phases implemented, tested (125 passing), and **PAPER-deployed on Fly.io**.
+> No live capital until the §6 promotion gate is passed on unreal (enforced by `ModeGuard`).
 
 ---
 
