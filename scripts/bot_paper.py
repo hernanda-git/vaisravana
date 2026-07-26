@@ -220,9 +220,9 @@ def run() -> None:
     while True:
         try:
             for pair in PAIRS:
-                for tf in TFS:
-                    _cycle(pair, tf, conn, surface, lc, tel, kill, decider,
-                           notifier, open_trades)
+                # Phase 12: one decision per minute on DECISION_TF (1m), using MTF context.
+                _decide_tick(pair, conn, surface, lc, tel, kill, decider,
+                             notifier, open_trades)
             # periodic status every ~30 min
             if time.time() - last_status > 1800:
                 _report_status(conn, notifier)
