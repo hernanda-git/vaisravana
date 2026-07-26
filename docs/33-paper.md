@@ -101,16 +101,16 @@ drawdown < 3%. Bad pairs/timeframes cannot contaminate good ones (isolation prin
 ## 3. Decision & Execution Flow (no signals)
 
 ```
-[every candle close per pair×TF (shadow)]
-  → engines → score → decisions_log (records decision + confidence_pct)
+[every candle close per pair×TF (shadow), for BOTH sides]
+  → engines → dual score (long_score, short_score) → decisions_log (decision + side + confidence_pct)
   → if ENTRY & Gate A (pre-scoring) & Gate B (hard clamp) pass:
-        LIMIT order (PAPER) → exec_events → trade_logs (open)
+        LIMIT order (PAPER) → exec_events → trade_logs (open, side=BUY|SELL)
 [on exit: TP / SL / trailing / max-hold]
   → trade_logs update (pnl, r, win/loss bool, win_pct/loss_pct)
-  → AUTO-EVALUATE per pair×TF (rolling 200)
+  → AUTO-EVALUATE per (pair, tf, SIDE) (rolling 200)
 [window: 200 trades / daily]
   → eval_report → Sentinel REASON (5W1H) → review → correct (shadow) → promote
-[gate passed + human approve] → LIVE for that pair×TF (shadow stays as baseline)
+[gate per side passed + human approve] → LIVE for that (pair, tf, SIDE); LONG & SHORT promoted independently
 ```
 
 The **two-layer safety gate** is central:
@@ -128,8 +128,8 @@ Three mandatory tables (full SQL schema in `30-concrete-spec.md §4`):
 
 1. **`trade_logs`** — one row per trade that entered a position. Lifecycle timestamps
    (`ts_filled`, `ts_tp_hit`, `ts_partial_close`, `ts_fully_closed`), **`win`/`loss`**
-   booleans, and cumulative **`win_pct`/`loss_pct`** per pair×TF. *Every* trade — win or
-   lose — is recorded. This is the basis for auto-evaluation and promotion.
+   booleans, and cumulative **`win_pct`/`loss_pct`** per (pair×tf×side). *Every* trade — win or
+   lose, LONG or SHORT — is recorded. This is the basis for auto-evaluation and promotion.
 2. **`decisions_log`** — the internal decision (replacing any notion of an external signal),
    including **`confidence_pct`** (0–100%). The trade is already "in" when this is written.
 3. **`results_log`** — the historical meta-loop trail: evaluation, reasoning (5W1H),

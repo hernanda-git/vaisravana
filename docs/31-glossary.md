@@ -29,8 +29,8 @@ istilah mengambang antar doc.
 | **Rollback** | Kembali ke config versi sebelumnya. | `25` |
 | **5W1H** | WHO/WHAT/WHEN/WHERE/WHY/HOW — scaffold reasoning. | `29` |
 | **H3 (novel)** | Hipotesis di luar kamus `28`. | `29` |
-| **Win-Rate gate** | **WR ≥ 85% per pair×TF** di shadow sebelum live. | `30` §6, `23`, `26` |
-| **ShadowTrader(P,TF)** | Shadow trader independen per pair×TF. | `30` §8, `ARCHITECTURE.md` §5 |
+| **Win-Rate gate** | **WR ≥ 85% per (pair, tf, SIDE)** — LONG & SHORT independen — di shadow sebelum live. | `30` §6, `23`, `26` |
+| **ShadowTrader(P,TF)** | Shadow trader independen per (pair, tf, SIDE); LONG & SHORT counter terpisah. | `30` §8, `ARCHITECTURE.md` §5 |
 | **Universe (all pairs)** | Semua Binance USDT perp, liquidity-filtered. | `30` §2, `ARCHITECTURE.md` §5 |
 | **Two-Layer Gate** | Gate A (pre-scoring) + Gate B (post-scoring hard clamp). | `25`, `30` §3, `32` |
 | **decisions_log** | Keputusan internal (pengganti signal) + `confidence_pct`. | `30` §4, `22` |
@@ -64,7 +64,7 @@ istilah mengambang antar doc.
 ## Open Questions / Belum Diputus (untuk implementasi)
 1. **Exchange** — sudah diputus: **Binance** (semua USDT perpetual). ✓
 2. **Timeframe** — sudah diputus: **5m / 10m / 15m**. ✓
-3. **Target WR** — sudah diputus: **≥ 85% per pair×TF** di shadow. ✓
+3. **Target WR** — sudah diputus: **≥ 85% per (pair×tf×side)** di shadow (LONG & SHORT independen). ✓
 4. **Universe** — semua pair, tapi butuh **liquidity filter threshold** pasti (spread/vol).
 5. **DB** — SQLite (lokal) vs Postgres (multi-instance). `30` sebutkan dua-duanya.
 6. **Bahasa** — Python disarankan (cepat); Go kalau latency kritis.

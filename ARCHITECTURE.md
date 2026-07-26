@@ -113,12 +113,12 @@
 |---|-----------|----------------|-----|
 | C1 | Market Data Layer | Fan-out WS per pair×TF; gap/freeze detection; orderflow | `22`, `28-A/C` |
 | C2 | Feature/Engine Layer | 9 engines → per-pair sub-scores (regime, structure, liq, candle, vol, volat, MTF) | `11`, `01`–`08` |
-| C3 | Multi-TF Shadow Engine | Independent shadow trader per pair×TF; records unreal WR | `30` §3,`§5` |
+| C3 | Multi-TF Shadow Engine | Independent shadow trader per (pair×tf×side); records unreal WR per SIDE | `30` §3,`§5`,`§8` |
 | C4 | Scoring & Decision | Aggregate → total score → entry/watch/skip with high threshold | `10`, `09` |
 | C5 | Risk Manager | Per-pair sizing, global exposure cap, daily-loss kill switch | `11` §8, `25`, `30` §7 |
 | C6 | Execution | LIMIT orders, fill tracking, reject/partial handling | `28-B`, `30` §3 |
 | C7 | Telemetry Store | Persist every event (decision/fill/exit/health) | `22`, `30` §4 |
-| C8 | Evaluation Engine | Auto-evaluate per pair×TF: WR, expectancy, attribution | `23` |
+| C8 | Evaluation Engine | Auto-evaluate per (pair×tf×side): WR, expectancy, attribution | `23` |
 | C9 | Reasoning Engine (5W1H) | Dynamic hypothesis (incl. novel H3) | `29` |
 | C10 | Sentinel (Correction) | Review → correct → shadow → promote → document | `24`, `26`, `20` |
 
@@ -249,7 +249,7 @@ Exchange WS ─▶ C1 Market Data ─▶ C2 Engines ─▶ C3 Shadow Engine
 3. **`docs/21-active-bot.md`** is the authoritative *parameter bounds*.
 4. All examples in `23/24/26` MUST match `30`/`21` values (no stale `0.80`/`3.0`/`lev 5`).
 5. Default mode is **PAPER/unreal** unless gate (`30` §6) passed.
-6. Win-rate gate is **85%** (not 55%) per pair×TF in shadow before live.
+6. Win-rate gate is **85%** per (pair, tf, SIDE) — LONG and SHORT gated independently — in shadow before live.
 7. Any doc edit that changes a value must propagate to dependents (see §9 map).
 
 ---

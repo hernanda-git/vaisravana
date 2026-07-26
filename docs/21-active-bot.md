@@ -24,7 +24,7 @@ Ini adalah "kontrak" yang menjamin auto-correction tidak merusak logika inti.
 | `risk_per_trade_pct` | float | 0.10% – 0.50% | Risiko per trade utk sizing (default **0.25%**) |
 | `max_position_notional_pct` | float | 10% – 60% | Cap notional vs free margin (default 50%) |
 | `winrate_gate_pct` | float | 80% – 95% | WR shadow wajib sebelum live (default **85%**) |
-| `min_trades_for_promote` | int | 100 – 500 | Min trade unreal per pair×TF (default **200**) |
+| `min_trades_for_promote` | int | 100 – 500 | Min trade unreal per (pair×tf×side) (default **200**) |
 | `global_max_live_pairs` | int | 1 – 20 | Cap pair×TF live simultan (default **5**) |
 | `filter.requement_<name>` | bool | on/off | Nyalakan/matikan filter |
 | `regime_params.<regime>.*` | object | per-regime | Param spesifik regime |

@@ -131,7 +131,7 @@ Three mandatory tables (full SQL in [`docs/30-concrete-spec.md §4`](docs/30-con
 
 | Table | Purpose |
 |-------|---------|
-| **`trade_logs`** | One row per trade that entered. Lifecycle timestamps (`ts_filled`, `ts_tp_hit`, `ts_fully_closed`), **`win`/`loss` booleans**, cumulative **`win_pct`/`loss_pct`** per pair×TF. *Every* trade recorded. |
+| **`trade_logs`** | One row per trade that entered. Lifecycle timestamps (`ts_filled`, `ts_tp_hit`, `ts_fully_closed`), **`win`/`loss` booleans**, cumulative **`win_pct`/`loss_pct`** per (pair×tf×side). *Every* trade recorded. |
 | **`decisions_log`** | Internal decision + **`confidence`%**. The trade is already "in" when written. |
 | **`results_log`** | Historical meta-loop trail: **evaluation / reasoning / thinking / correction / improvement / review**. |
 
@@ -239,14 +239,15 @@ and [`docs/25-safety-shadow-rollback.md`](docs/25-safety-shadow-rollback.md).
 
 ## 🚀 Quick Decision Tree (entry)
 
+> **Bidirectional** — SHORT is a first-class path, not a mirrored long. Each long condition
+> has a bearish twin. Win rate ≥85% is gated **per (pair, timeframe, side)**.
+
 ```text
-Trend? ──▶ Bullish?
-            └─ Price at support?
-                 └─ Bullish candle appears?
-                      └─ Volume rising?
-                           └─ Momentum sufficient?
-                                └─ Spread safe?
-                                     └─ OPEN BUY
+Regime + HTF bias (1h/4h) → pick direction:
+  ├─ Bullish (uptrend, support, post-sweep) + bullish LTF candle + vol↑ + momentum
+  │   + spread<5bps + ATR normal + funding ok + ADL<4  →  OPEN BUY  (SL below, TP above)
+  └─ Bearish (downtrend, resistance, post-sweep-up) + bearish LTF candle + vol↑ + momentum
+      + spread<5bps + ATR normal + funding ok + ADL<4  →  OPEN SELL/SHORT  (SL above, TP below)
 ```
 
 ## 📈 Scoring Weights (futures)

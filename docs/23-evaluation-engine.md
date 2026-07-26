@@ -14,11 +14,12 @@ Bagian Sentinel yang menghitung metrik dari telemetry. Berjalan otomatis (tiap t
 | Trade Efficiency | MFE vs actual exit | Apakah TP/SL pas? |
 
 ## 5. Per-Pair × Per-TF Evaluation (HEADLINE: +85% WR)
-Sistem mengevaluasi **setiap kombinasi pair×TF secara independen** (`30` §5, §8).
+Sistem mengevaluasi **setiap kombinasi (pair, tf, SIDE) secara independen** — LONG dan
+SHORT dihitung sebagai dua counter terpisah (`30` §5, §8).
 
 | Metrik | Target |
 |--------|--------|
-| **Win Rate (per pair×TF)** | **≥ 85%** (gate promosi ke live) |
+| **Win Rate (per pair×tf×side)** | **≥ 85%** (gate promosi ke live, per BUY & per SELL) |
 | Expectancy (R) | > +0.2R |
 | Profit Factor | > 1.20 |
 | Max Drawdown | < 3% |
@@ -26,8 +27,9 @@ Sistem mengevaluasi **setiap kombinasi pair×TF secara independen** (`30` §5, �
 | Fill rate | > 95% |
 | Avg slippage | < 5 bps |
 
-Rolling window **200 trade per pair×TF**. Pair×TF di bawah 85% WR → Sentinel revert ke
-shadow / disable (`30` §6). Atribusi per-faktor & per-regime tetap dihitung untuk koreksi.
+Rolling window **200 trade per (pair, tf, side)**. (pair, tf, side) di bawah 85% WR →
+Sentinel revert ke shadow / disable (`30` §6). Atribusi per-faktor & per-regime tetap
+dihitung untuk koreksi.
 Untuk tiap faktor skor, hitung:
 - Win rate saat faktor tersebut **tinggi** vs **rendah**.
 - Korelasi skor-faktor vs PnL.

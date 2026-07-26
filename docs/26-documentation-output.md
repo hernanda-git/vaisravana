@@ -5,7 +5,7 @@ manusia + mesin. Semua juga masuk ke `results_log` (`30` §4) secara terstruktur
 
 > **TIDAK ADA sinyal eksternal** — istilah "signal" diganti "decision" (internal).
 
-## 1. `eval_report.md` — hasil auto-evaluate (PER PAIR×TF)
+## 1. `eval_report.md` — hasil auto-evaluate (PER PAIR×TF×SIDE)
 ```markdown
 # Eval Report — 2026-07-26 (window harian)
 Portfolio WR: 86% | Expectancy: +0.7R | PF: 1.4 | MaxDD: 1.9%
@@ -55,7 +55,7 @@ Bound check: PASS | Rate-limit: 5 changes ≤ 5 ✓
 Shadow WR target ≥ 85%, Exp ≥ +0.7R, DD ≤ 1.9%.
 ```
 > Contoh nilai mengikuti `30-concrete-spec.md`. Boundary leverage maks 3 (`21`),
-> jadi jangan pernah contohkan leverage 5. Fokus koreksi: **naikkan WR per pair×TF ke ≥85%**.
+> jadi jangan pernah contohkan leverage 5. Fokus koreksi: **naikkan WR per (pair×tf×side) ke ≥85%**.
 
 ## 3. `changelog.md` — apa yang BENAR diterapkan
 ```markdown
@@ -75,10 +75,10 @@ Shadow: WR 87% (≥85% gate), Exp +0.72R (≥live/paper), DD 1.7% (≤limit) →
 Insiden: pasca-promosi ETHUSDT/5m, WR jatuh ke 81% dalam 50 trade validasi.
 Penyebab: tp_atr_mult 1.0→1.4 tanpa cukup shadow window (baru 30 trade).
 Tindakan: REVERT ETHUSDT/5m ke SHADOW, high_vol regime di-disable sementara.
-Pelajaran: perubahan multiplier butuh shadow ≥ 100 trade per pair×TF.
+Pelajaran: perubahan multiplier butuh shadow ≥ 100 trade per (pair×tf×side).
 ```
 > Catatan: leverage di cap keras max 3 (`21`), jadi insiden leverage tidak bisa melebihi itu.
-> Postmortem harus realistis dalam bound. Gate utama adalah **WR 85% per pair×TF**.
+> Postmortem harus realistis dalam bound. Gate utama adalah **WR 85% per (pair×tf×side)**.
 
 ## 5. `chronicle.md` — LOG KRONOLOGIS (sesuai fundamental project) ⭐
 File **append-only, terurut waktu**, di `reports/<YYYY-MM-DD>/chronicle.md`. Setiap entri

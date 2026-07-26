@@ -13,7 +13,7 @@ Dokumen induk untuk bot yang **auto-correction, auto-improve, auto-review, auto-
         ┌──────────────────────────────────────────────┐
         │            VAIÅRAVAá¹A-TRADER (AKTIF)              │  ← entry/exit
         │  9 engine + scoring + risk manager            │
-        │  MODE DEFAULT: PAPER/UNREAL (lihat 30)        │  ← log semua win/loss per pair×TF
+        │  MODE DEFAULT: PAPER/UNREAL (lihat 30)        │  ← log semua win/loss per (pair×tf×side)
         │  UNIVERSE: all Binance USDT (liquidity-filtered) │  ← 5m/10m/15m shadow
         └───────┬───────────────────────┬──────────────┘
                 │ order                  │ telemetry (log)

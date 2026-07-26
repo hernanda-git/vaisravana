@@ -35,7 +35,7 @@ CHANGE PROPOSAL v1.4.3 (kandidat, SHADOW)
   => Σ weights = 1.00 ✓
 ```
 > Nilai awal mengikuti `30-concrete-spec.md` (entry 0.90, tp 1.05, WR gate 85%).
-> Koreksi ke arah **naikkan WR per pair×TF**, bukan cuma expectancy.
+> Koreksi ke arah **naikkan WR per (pair×tf×side)**, bukan cuma expectancy.
 
 Aturan aman koreksi:
 - Perubahan bobot per siklus ≤ ±10% dari nilai saat ini.

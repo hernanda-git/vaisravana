@@ -6,7 +6,7 @@
 **Target (from architecture §1):**
 1. **TIME-SENSITIVE ACCURACY** — decision < 200ms, fill < 2s.
 2. **STABILITY** — max DD < 3% (unreal & live).
-3. **HIGH WIN RATE ≥ 85%** — per pair×TF in shadow before any live.
+3. **HIGH WIN RATE ≥ 85%** — per (pair, tf, SIDE) in shadow before any live.
 4. **MICRO-TIMEFRAME** — trade windows **5m / 10m / 15m**.
 5. **ALL BINANCE PAIRS** — universe = all USDT perpetuals, liquidity-filtered.
 6. **SHADOW-FIRST** — record every win/loss on unreal before live.
@@ -17,11 +17,11 @@
 
 | Mode | Arti | Kapan |
 |------|------|-------|
-| `PAPER` (unreal) | Simulasi; **setiap win/loss per pair×TF** dicatat | **DEFAULT** |
-| `SHADOW` | Param kandidat per pair×TF, tak eksekusi | Uji koreksi Sentinel |
-| `LIVE` | Uang nyata, **per pair×TF** yang lolos gate | Hanya setelah gate §6 |
+| `PAPER` (unreal) | Simulasi; **setiap win/loss per (pair×tf×side)** dicatat | **DEFAULT** |
+| `SHADOW` | Param kandidat per (pair×tf×side), tak eksekusi | Uji koreksi Sentinel |
+| `LIVE` | Uang nyata, **per (pair×tf×side)** yang lolos gate | Hanya setelah gate §6 |
 
-> Unreal-first: bot menghidupkan shadow trader per pair×TF. Live menyala **per pasangan**
+> Unreal-first: bot menghidupkan shadow trader per (pair×tf×side). Live menyala **per (pair×tf×side)**
 > (tidak semua sekaligus) hanya kalau gate terpenuhi.
 
 ---
@@ -77,9 +77,15 @@ rounding per-filter, SL pakai conditional STOP (reduceOnly) + fallback mark-pric
 - reduceOnly pada semua close order (cegah accidental flip).
 
 ### Pre-entry confluence (SEMUA wajib — Decision Tree `09`, versi konkret)
+
+Dua jalur **simetris** — SHORT adalah first-class, bukan kebalikan long.
+
 ```text
-Bias 1h/4h bullish (untuk BUY)?
-  + HTF di support / setelah liquidity sweep
+Tentukan arah dari regime + bias HTF (1h/4h):
+
+[BUY / LONG]
+  Bias 1h/4h bullish
+  + HTF di support / setelah liquidity sweep ke bawah
   + Bullish candle di LTF (BUKAN exhaustion spike — Layer 3)
   + Volume > avg × 1.3
   + Spread < 5 bps              ← krusial multi-pair
@@ -88,8 +94,27 @@ Bias 1h/4h bullish (untuk BUY)?
   + ADL rank < 4
   + Bukan window maintenance / delist
   + Pair sudah punya shadow WR ≥ 85% (atau masih fase akumulasi ≥200 trade)
-  = ENTRY (PAPER dulu)  →  lewati Gate A + Gate B
+  = ENTRY LONG (PAPER dulu)  →  lewati Gate A + Gate B
+    SL di bawah entry, TP di atas (R:R ~1.0)
+
+[SELL / SHORT]   ← pasangan simetris dari LONG
+  Bias 1h/4h bearish
+  + HTF di resistance / setelah liquidity sweep ke atas
+  + Bearish candle di LTF (BUKAN exhaustion spike — Layer 3)
+  + Volume > avg × 1.3
+  + Spread < 5 bps
+  + ATR normal (bukan spike ekstrem)
+  + Funding tidak ekstrem
+  + ADL rank < 4
+  + Bukan window maintenance / delist
+  + Pair sudah punya shadow WR ≥ 85% (atau masih fase akumulasi ≥200 trade)
+  = ENTRY SHORT (PAPER dulu)  →  lewati Gate A + Gate B
+    SL di atas entry, TP di bawah (R:R ~1.0)
 ```
+> **Gate WR per (pair, tf, SIDE):** WR ≥85%, expectancy >+0.2R, DD<3% dihitung
+> **terpisah untuk LONG dan SHORT** (futures bidirectional). Promosi LIVE juga per
+> (pair, tf, side). `decisions_log.decision = ENTRY` berlaku untuk kedua arah;
+> `trade_logs.side = BUY | SELL` mencatat arah aktual.
 
 ### Slippage & spread guard (eksekusi multi-pair)
 - Skip entry kalau `spread_bps > 5` (per-pair ambang).
@@ -149,8 +174,8 @@ CREATE TABLE trade_logs (
   -- hasil
   win            INTEGER,         -- 1 = win, 0 = lose (boolean, sesuai request)
   loss           INTEGER,         -- 1 = lose, 0 = win (boolean komplemen win)
-  win_pct        REAL,            -- % menang kumulatif per pair×TF saat trade ini
-  loss_pct       REAL,            -- % kalah kumulatif per pair×TF saat trade ini
+  win_pct        REAL,            -- % menang kumulatif per (pair×tf×side) saat trade ini
+  loss_pct       REAL,            -- % kalah kumulatif per (pair×tf×side) saat trade ini
   pnl_usd        REAL, pnl_pct REAL, r_multiple REAL,
   entry_price    REAL, exit_price REAL,
   size           REAL, leverage REAL,
@@ -163,7 +188,7 @@ CREATE TABLE trade_logs (
 );
 ```
 > **SETIAP trade (menang ATAUPUN kalah) wajib masuk.** `win`/`loss` boolean, `win_pct`/
-> `loss_pct` di-update (rolling per pair×TF) tiap trade close. Ini basis auto-evaluate + promosi.
+> `loss_pct` di-update (rolling per (pair×tf×side)) tiap trade close. Ini basis auto-evaluate + promosi.
 
 ### `decisions_log` (keputusan internal + confidence %, pengganti signals_log)
 Bot memutuskan sendiri → rekam keputusan + **persen confidence**. Ini menggantikan konsep
@@ -245,13 +270,17 @@ CREATE TABLE system_health (
 
 ---
 
-## 5. Auto Evaluate (konkret, tiap trade, PER PAIR×TF)
+## 5. Auto Evaluate (konkret, tiap trade, PER PAIR×TF×SIDE)
 
-Trigger: setiap `trade_logs` close → evaluator (`23`) update **per pair×TF**.
+Trigger: setiap `trade_logs` close → evaluator (`23`) update **per (pair, tf, side)**.
+
+> **SIDE-aware:** LONG dan SHORT dihitung sebagai dua counter terpisah. WR ≥85%,
+> expectancy, DD, dll harus lolos **masing-masing untuk BUY dan SELL** — tidak
+> digabung. Ini krusial karena kondisi pasar bullish/bearish tidak simetris.
 
 | Metrik | Target (stability + high WR) |
 |--------|------------------------------|
-| **Win Rate (per pair×TF)** | **≥ 85%** ← headline gate |
+| **Win Rate (per pair×tf×side)** | **≥ 85%** ← headline gate |
 | Expectancy (R) | > +0.2R |
 | Profit Factor | > 1.20 |
 | Max Drawdown (akumulasi unreal) | < 3% |
@@ -259,22 +288,25 @@ Trigger: setiap `trade_logs` close → evaluator (`23`) update **per pair×TF**.
 | Fill rate | > 95% |
 | Avg slippage (bps) | < 5 |
 
-Rolling window **200 trade per pair×TF** + harian. Output: `eval_report.md` (`26`).
+Rolling window **200 trade per (pair, tf, side)** + harian. Output: `eval_report.md` (`26`).
 
 ---
 
-## 6. Promotion Gate (PAPER → LIVE, per pair×TF)
+## 6. Promotion Gate (PAPER → LIVE, per pair×TF×SIDE)
 
-Live untuk **satu pair×TF** HANYA kalau semua terpenuhi (di PAPER):
-- Minimal **200 trade unreal** untuk pair×TF itu.
-- **Win Rate ≥ 85%** selama 200 trade tersebut.
+Live untuk **satu (pair, tf, SIDE)** HANYA kalau semua terpenuhi (di PAPER):
+- Minimal **200 trade unreal** untuk (pair, tf, side) itu.
+- **Win Rate ≥ 85%** selama 200 trade tersebut **untuk side tersebut**.
 - Expectancy > +0.2R.
 - Max DD < 3%.
 - Profit Factor > 1.3.
 - `system_health` bersih (tidak ada insiden data/eksekusi).
 - Peer-review manusia (mode supervised) menyetujui.
 
-**Post-live monitoring:** kalau WR pair×TF jatuh < 85% selama window validasi →
+> LONG dan SHORT dipromosikan **independen**. Mis. BTCUSDT/5m LONG lulus gate tapi
+> SHORT belum → hanya LONG yang LIVE; SHORT tetap di shadow sampai lolos.
+
+**Post-live monitoring:** kalau WR (pair, tf, side) jatuh < 85% selama window validasi →
 Sentinel revert ke shadow atau disable. Portfolio WR dijaga lewat pruning.
 
 ---
@@ -287,7 +319,7 @@ Sentinel revert ke shadow atau disable. Portfolio WR dijaga lewat pruning.
 | `daily_loss_limit_pct` | **0.5%** (unreal & live) → tembus = PAPER + alarm |
 | `risk_per_trade_pct` | **0.25%** |
 | `cooldown_after_loss` | **10 menit** |
-| `max_open_positions` | **1 per pair×TF** (tidak stacking) |
+| `max_open_positions` | **1 per (pair×tf×side)** (tidak stacking) |
 | `global_max_exposure` | **cap total notional** (mis. 5 pair×TF live sekaligus) |
 | `losing_streak_limit` | 5 → cooldown 30 menit |
 | Kill switch | drawdown harian / ADL ≥4 / feed frozen / maintenance / delist |
@@ -297,34 +329,34 @@ Sentinel revert ke shadow atau disable. Portfolio WR dijaga lewat pruning.
 
 ## 8. Multi-Timeframe Shadow Engine (detail `ARCHITECTURE.md` §5)
 
-```
+```text
 for each pair P in universe (all Binance USDT, liquidity-filtered):
   for each TF in {5m, 10m, 15m}:
-     ShadowTrader(P, TF):
-        - state & scores independent
-        - log every unreal trade → trade_logs(pair=P, tf=TF)
-        - EVALUATE WR per (P,TF)
-        - if WR ≥ 85% over ≥200 trades AND gate §6 → promote to LIVE(P,TF)
-        - if WR < 85% after promotion → revert/disable
+    ShadowTrader(P, TF):          # mengevaluasi DUA side secara independen
+       - state & scores independent per SIDE (LONG counter & SHORT counter terpisah)
+       - log every unreal trade → trade_logs(pair=P, tf=TF, side=BUY|SELL)
+       - EVALUATE WR per (P, TF, SIDE)
+       - if WR ≥ 85% over ≥200 trades (side itu) AND gate §6 → promote LIVE(P,TF,SIDE)
+       - if WR < 85% after promotion → revert/disable that side
 ```
-Isolasi: pair×TF buruk tidak merusak lainnya. Sentinel bisa disable 1 baris saja.
+Isolasi: (pair×TF×side) buruk tidak merusak lainnya. Sentinel bisa disable 1 baris saja.
 
 ---
 
 ## 9. Alur Konkret
 
-```
-[setiap candle close per pair×TF (shadow)]
-  → engines → scores → decisions_log
-  → jika ENTRY & semua check lolos:
-       LIMIT order (PAPER) → exec_events → trade_logs(open)
+```text
+[setiap candle close per pair×TF (shadow), untuk kedua SIDE]
+  → engines → scores → decisions_log (decision=ENTRY, side=BUY|SELL)
+  → jika ENTRY & semua check lolos (Gate A + Gate B):
+       LIMIT order (PAPER) → exec_events → trade_logs(open, side)
 [exit: TP/SL/trailing/maxhold]
-  → trade_logs update (pnl, r)
-  → AUTO-EVALUATE per pair×TF (rolling 200)
+  → trade_logs update (pnl, r, win/loss)
+  → AUTO-EVALUATE per (pair, tf, SIDE) (rolling 200)
 [window 200 trade / harian]
   → eval_report → Sentinel REASON(5W1H) → review → correct(shadow) → promote
-[gate §6 + approve manusia]
-  → LIVE untuk pair×TF itu (shadow tetap jalan sebagai baseline)
+[gate §6 (per side) + approve manusia]
+  → LIVE untuk (pair, tf, SIDE) itu (shadow tetap jalan sebagai baseline)
 ```
 
 ---
@@ -339,4 +371,4 @@ Isolasi: pair×TF buruk tidak merusak lainnya. Sentinel bisa disable 1 baris saj
 - **Logged everything:** tiap event persist (`22`/`30` §4).
 
 ---
-▶ Implementasi: `ARCHITECTURE.md` → doc ini → `22` schema → `23` evaluator (per pair×TF) → `27` loop.
+▶ Implementasi: `ARCHITECTURE.md` → doc ini → `22` schema → `23` evaluator (per pair×tf×side) → `27` loop.
