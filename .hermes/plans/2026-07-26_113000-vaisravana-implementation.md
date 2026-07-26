@@ -172,7 +172,7 @@ timestamps, `win`/`loss` booleans, and rolling `win_pct`/`loss_pct` per pair×TF
 
 ---
 
-## Phase 6 — Evaluation Engine + Auto-Evaluate (per pair×TF)
+## Phase 6 — Evaluation Engine + Auto-Evaluate (per pair×TF)  ✅ DONE (2026-07-26)
 
 **Objective:** Implement `doc 23` metrics, triggered per `trade_logs` close, rolling 200.
 
