@@ -1,5 +1,18 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.9 (2026-07-26)
+- DB awareness + overall win-rate monitoring (README ask):
+  - NEW `db.db_stats()`: per-table row counts (trade_logs / decisions_log / results_log /
+    exec_events / system_health), total rows, on-disk size (main + WAL + SHM sidecars, with
+    a PRAGMA page_count*page_size fallback), and a portfolio-wide overall win rate
+    (n_wins/n_losses/win_rate_pct across ALL closed trades).
+  - NEW `notify_db_stats()` Telegram card: overall win rate + DB size + per-table counts so
+    the owner can watch database growth. Sent on boot AND every 30m status cycle.
+  - 30m status card now leads with a "WR total" line + a compact "DB size · rows" line above
+    the per-(pair,tf,side) breakdown.
+  - HTML render verified: raw `v0.0.9`, no backslashes, no em-dash.
+  - +8 tests (tests/test_phase16_db_stats.py) -> 133 passing.
+
 ## v0.0.8 (2026-07-26)
 - Telegram notifier overhaul (docs/43-telegram-notifier.md):
   - Root cause of "no message on deploy": the startup card used MarkdownV1 with

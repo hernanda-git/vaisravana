@@ -206,7 +206,42 @@ class TelegramNotifier:
     def notify_status(self, title: str, body_md: str) -> bool:
         return self.send_message(f"📊 <b>{html_escape(title)}</b>\n\n{body_md}")
 
-    def notify_status_30m(self, lines: list[str]) -> bool:
-        """Periodic 30m status card (Bahasa Indonesia)."""
+    def notify_status_30m(self, lines: list[str], overall: str = "",
+                          dbline: str = "") -> bool:
+        """Periodic 30m status card (Bahasa Indonesia).
+
+        `overall` = portfolio-wide win-rate line, `dbline` = DB size/row summary,
+        both rendered above the per-series breakdown so the owner can watch the
+        aggregate win rate and DB growth at a glance.
+        """
         body = "\n".join(lines) if lines else "<i>Belum ada trade dieksekusi.</i>"
-        return self.send_message(f"📊 <b>Vessavaṇa - Status (30m)</b>\n\n{body}")
+        head = ""
+        if overall:
+            head += f"{overall}\n"
+        if dbline:
+            head += f"{dbline}\n"
+        if head:
+            head += "\n"
+        return self.send_message(f"📊 <b>Vessavaṇa - Status (30m)</b>\n\n{head}{body}")
+
+    def notify_db_stats(self, version: str, stats: dict) -> bool:
+        """Standalone DB-awareness card: overall win rate + per-table row counts +
+        on-disk size, so the owner can monitor database growth over time (doc 43)."""
+        o = stats.get("overall", {})
+        c = stats.get("counts", {})
+        wr = o.get("win_rate_pct", 0.0)
+        text = (
+            f"🗄️ <b>Database - Vessavaṇa</b> · <code>v{html_escape(version)}</code>\n"
+            f"\n"
+            f"<b>Win rate</b>  : <code>{wr:.1f}%</code> "
+            f"({o.get('n_wins', 0)}W / {o.get('n_losses', 0)}L · {o.get('n_closed', 0)} closed)\n"
+            f"<b>Ukuran DB</b> : <code>{html_escape(stats.get('size_human', '0 B'))}</code>\n"
+            f"<b>Total row</b> : <code>{stats.get('total_rows', 0)}</code>\n"
+            f"\n"
+            f"<b>trade_logs</b>     : <code>{c.get('trade_logs', 0)}</code>\n"
+            f"<b>decisions_log</b>  : <code>{c.get('decisions_log', 0)}</code>\n"
+            f"<b>results_log</b>    : <code>{c.get('results_log', 0)}</code>\n"
+            f"<b>exec_events</b>    : <code>{c.get('exec_events', 0)}</code>\n"
+            f"<b>system_health</b>  : <code>{c.get('system_health', 0)}</code>\n"
+        )
+        return self.send_message(text)

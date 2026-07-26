@@ -1,478 +1,220 @@
-# Smart Money Concepts (SMC) + Multi-Timeframe Moving Average (MTF MA)
-## AI Knowledge Base Context
+# Smart Money Concepts (SMC) + Multi-Timeframe MA — *Vaiśravaṇa-aligned*
+
+> Companion to [`smc-index.md`](smc-index.md). This file re-anchors the SMC doctrine to
+> Vaiśravaṇa's **actual** runtime: the 9-engine dual-score stack, the `MarketState` SMC
+> slots, and the `decide_ctx` relational modulator. The mechanical detector spec lives in
+> [`smc-detector.md`](smc-detector.md); the win-rate math in
+> [`smc-scoring-impact.md`](smc-scoring-impact.md).
 
 ---
 
-# Objective
+## 0. Why this doc exists (and what changed vs. the original)
 
-This document provides the conceptual framework for combining **Multi-Timeframe Moving Averages (MTF MA)** with **Smart Money Concepts (SMC)** for institutional-style market analysis.
+The original `smc.md` was a *generic* SMC primer. It was correct but disconnected from
+the codebase: it never named the slots the engine reads, the weights those slots feed, or
+the plug-in that is missing. This revision keeps the doctrine and binds every concept to a
+**concrete, verifiable** part of Vaiśravaṇa:
 
-The goal is **not** to predict price using indicators alone, but to build a probabilistic understanding of:
+| SMC concept | Vaiśravaṇa home | Doc |
+|-------------|-----------------|-----|
+| Trend filter (MTF MA) | `regime_score` + `htf_bias` | `08-multi-timeframe.md`, `src/engines.py` |
+| Order Block | `smc.py` → `ob_bull`/`ob_bear` → `structure_score` | `smc-detector.md` |
+| FVG | `smc.py` → `fvg` (decoupled from `bos`) | `06-liquidity.md`, `smc-detector.md` |
+| Liquidity sweep / EQ highs-lows | `liq_sweep`, `eq_high`, `eq_low` | `06-liquidity.md` |
+| BOS / CHoCH / MSS | `bos`, `choch`, `hh/hl/lh/ll` | `01-market-structure.md` |
+| Premium / Discount | `premium`, `discount` (enrichment) | `smc-scoring-impact.md` |
+| Breaker / Mitigation blocks | `breaker`, `mitigation` (enrichment) | `smc-detector.md` |
+| Displacement | `displacement_z` (enrichment) | `09-smart-candle-analysis.md` |
 
-- Market Trend
-- Institutional Intent
-- Liquidity
-- Market Structure
-- High-Probability Entry Zones
-- Risk Management
-
-This methodology separates **trend identification** from **trade execution**, allowing each tool to perform the task it is best suited for.
-
----
-
-# Core Philosophy
-
-Most retail traders ask:
-
-> Is price above or below the EMA?
-
-Professional traders ask deeper questions:
-
-- Who is currently in control?
-- Where are institutions accumulating?
-- Where are institutions distributing?
-- Where is liquidity concentrated?
-- Where are retail stop losses likely placed?
-- Has market structure changed?
-- Is the current breakout genuine or engineered?
-- Is this a continuation or a liquidity trap?
-
-Smart Money Concepts attempts to answer these questions by interpreting price action through the lens of institutional behavior rather than relying solely on lagging indicators.
+The single most important correction: **SMC is not a separate strategy here — it is the
+microstructure input layer that makes the existing 15% structure + 10% liquidity factors
+real instead of floor-defaulted.** (doc 40 §1.4: those two factors were "starved" live.)
 
 ---
 
-# Separation of Responsibilities
+## 1. Objective
 
-One of the biggest mistakes retail traders make is expecting a single indicator to solve every problem.
+Build a *probabilistic* read of:
 
-Instead, assign clear responsibilities to each analytical tool.
+- Market trend (MTF MA — strategic compass)
+- Institutional intent (SMC — tactical map)
+- Liquidity (where stops/entries cluster)
+- Market structure (BOS/CHoCH/swing sequence)
+- High-probability entry zones (OB / FVG / premium-discount reversion into an OB)
+- Risk placement (SL beyond swept liquidity / invalidated structure)
 
----
-
-## Moving Average Responsibilities
-
-Moving averages answer:
-
-> **"Should I even be looking for Longs or Shorts?"**
-
-They define:
-
-- Higher Timeframe Trend
-- Overall Market Bias
-- Dynamic Support
-- Dynamic Resistance
-- Trend Momentum
-- Trend Continuation
-
-Moving averages should **NOT** be treated as precise entry signals.
-
-Their purpose is directional filtering.
+…so the **7-factor confluence score** (`src/engines.py`, doc 10) only clears the
+`entry_threshold` (default **0.90**, doc 30 §3) on genuine A+ setups. Higher-quality
+confluence → fewer, better entries → higher win rate without loosening risk.
 
 ---
 
-## Smart Money Concepts Responsibilities
+## 2. Core Philosophy (unchanged in spirit, now engine-bound)
 
-SMC answers:
+Retail asks *"is price above the EMA?"* — a lagging, single-instrument question.
+Professionals ask:
 
-> **"Where should I actually enter the trade?"**
+- Who is in control? → `regime_score` + `htf_bias` (the MA lens)
+- Where did institutions accumulate / distribute? → `ob_bull` / `ob_bear`
+- Where is liquidity? → `liq_sweep`, `eq_high`, `eq_low`, `fvg`
+- Has structure shifted? → `bos`, `choch`, `hh/hl/lh/ll`
+- Was the breakout genuine or engineered? → sweep + displacement + CHoCH triad
+- Premium or discount vs. the dealing range? → `premium` / `discount`
 
-SMC identifies:
-
-- Institutional Buying Zones
-- Institutional Selling Zones
-- Liquidity Pools
-- Order Blocks
-- Fair Value Gaps (FVG)
-- Break of Structure (BOS)
-- Change of Character (CHoCH)
-- Liquidity Sweeps
-- Stop Hunts
-- Premium / Discount Zones
-- Swing Highs
-- Swing Lows
-
-SMC focuses on execution rather than trend determination.
+SMC answers these by reading price *as institutional behavior*, not as an indicator output.
 
 ---
 
-# Conceptual Comparison
+## 3. Separation of Responsibilities (maps to the stack)
 
-| Multi-Timeframe Moving Average | Smart Money Concepts |
-|--------------------------------|----------------------|
-| Determines overall trend | Determines execution zones |
-| Filters trade direction | Finds entry locations |
-| Dynamic support/resistance | Order Blocks |
-| Trend continuation | Break of Structure (BOS) |
-| Momentum confirmation | Change of Character (CHoCH) |
-| Trend filter | Liquidity Sweep |
-| Bias confirmation | Stop Hunt Detection |
-| Higher timeframe context | Lower timeframe precision |
+| Concern | Owner in Vaiśravaṇa | Weight | Reads SMC? |
+|---------|---------------------|--------|-----------|
+| Should I look for longs or shorts? | MTF MA → `regime_score` + `htf_bias` | **trend 30%** | no (MA lens) |
+| Momentum / exhaustion | `momentum_score` | 20% | candle only |
+| Volume confirmation | `volume_score` | 15% | no |
+| **Where do I enter / is structure valid?** | `structure_score` | **15%** | **yes** |
+| **Liquidity / sweep / FVG** | `liquidity_score`/`_bear` | **10%** | **yes** |
+| Volatility sweet-spot | `atr_score` | 5% | no |
+| Funding/OI sanity | `funding_oi_score` | 5% | no |
+| Cross-asset + MTF stack | `decide_ctx` modulator | — (boost/clamp) | via `MarketContext` |
 
-Think of the Moving Average as the **strategic compass**, while Smart Money Concepts functions as the **tactical map**.
-
----
-
-# Institutional Thinking
-
-Instead of asking:
-
-> Is price above the EMA?
-
-SMC asks:
-
-- Where did institutions accumulate positions?
-- Where did institutions distribute positions?
-- Where is buy-side liquidity?
-- Where is sell-side liquidity?
-- Where are retail stop losses concentrated?
-- Has market structure shifted?
-- Was the breakout authentic or a liquidity grab?
-- Did price intentionally sweep liquidity before reversing?
-- Is price rebalancing an inefficiency (Fair Value Gap)?
-- Is price trading at Premium or Discount relative to the current dealing range?
-
-These questions aim to infer institutional participation rather than react to price after the fact.
+Think of MTF MA as the **strategic compass**, SMC as the **tactical map**, and
+`decide_ctx` as the **air-traffic controller** that blocks trades fighting BTC's rudder.
 
 ---
 
-# Institutional Workflow
-
-## Step 1 — Determine Higher Timeframe Bias
-
-Use higher timeframe moving averages such as:
-
-- Daily 20 EMA
-- Daily 50 EMA
-
-Questions:
-
-- Is price above both EMAs?
-- Is the 20 EMA above the 50 EMA?
-- Are both EMAs sloping upward?
-- Is the market trending or ranging?
-
-Result:
-
-Determine one of:
-
-- Bullish Bias
-- Bearish Bias
-- Neutral
-- Avoid Trading
-
----
-
-## Step 2 — Wait
-
-Do not chase price.
-
-Allow price to retrace naturally into areas where institutions are likely interested.
-
-Examples:
-
-- Order Block
-- Fair Value Gap
-- Discount Zone (Bullish)
-- Premium Zone (Bearish)
-- Previous Liquidity
-
-Patience is part of the strategy.
-
----
-
-## Step 3 — Observe Market Structure
-
-Look for evidence that confirms institutional participation.
-
-Typical confirmations include:
-
-- Change of Character (CHoCH)
-- Break of Structure (BOS)
-- Liquidity Sweep
-- Rejection Candle
-- Strong Displacement
-- High Momentum Candle
-
-No confirmation means no trade.
-
----
-
-## Step 4 — Execute
-
-Enter only after confirmation.
-
-Avoid entering simply because price touched an Order Block.
-
-Wait until structure validates the trade idea.
-
----
-
-## Step 5 — Risk Management
-
-Stop Loss should generally be placed beyond:
-
-- Liquidity Sweep
-- Swing High
-- Swing Low
-- Invalidated Structure
-- Opposite side of Order Block
-
-Avoid placing stops at obvious retail locations.
-
----
-
-# Typical Long Workflow
-
-Higher Timeframe
-
-- Daily 20 EMA above Daily 50 EMA
-- Price above both EMAs
-
-↓
-
-Bias = Bullish
-
-↓
-
-Wait for pullback
-
-↓
-
-Price enters Bullish Order Block
-
-↓
-
-Liquidity Sweep occurs
-
-↓
-
-CHoCH forms
-
-↓
-
-Bullish BOS confirms
-
-↓
-
-Enter Long
-
-↓
-
-Stop below liquidity
-
-↓
-
-Target next liquidity zone
-
----
-
-# Typical Short Workflow
-
-Higher Timeframe
-
-- Daily 20 EMA below Daily 50 EMA
-- Price below both EMAs
-
-↓
-
-Bias = Bearish
-
-↓
-
-Wait for pullback
-
-↓
-
-Price enters Bearish Order Block
-
-↓
-
-Liquidity Sweep occurs
-
-↓
-
-Bearish CHoCH
-
-↓
-
-Bearish BOS
-
-↓
-
-Enter Short
-
-↓
-
-Stop above liquidity
-
-↓
-
-Target next sell-side liquidity
-
----
-
-# Decision Hierarchy
-
-A disciplined decision process should follow this order:
-
+## 4. Institutional Workflow (now a per-candle pipeline)
+
+The original 5-step workflow maps 1:1 onto the bot's per-candle cycle
+(`src/decision.py:DecisionOrchestrator.process`):
+
+1. **Higher-TF bias** → `regime_score` (EMA20/50 slope) + `htf_bias` (1h/4h).
+2. **Wait / retrace** → no chase; the detector looks for price returning into an OB or
+   discount zone on the LTF.
+3. **Observe structure** → `smc.py` sets `bos`/`choch`/`liq_sweep`/OB. No confirmation
+   (all three-layer confluence absent) → the 15%+10% factors stay low → score stays
+   under threshold → **SKIP**.
+4. **Execute** → only after `decide()` returns `ENTRY` (score ≥ `entry_threshold`) **and**
+   both gates pass (`src/gate.py` TwoLayerGate). For LONG: SL below swept liquidity; for
+   SHORT: SL above (Gate B enforces SL direction — doc 25 §2).
+5. **Risk** → SL beyond liquidity / invalidated structure; R:R ~1.0 (doc 30 §3).
+
+### Typical LONG workflow (engine-readable)
 ```
-Trend
-    ↓
-Bias
-    ↓
-Liquidity
-    ↓
-Market Structure
-    ↓
-Confirmation
-    ↓
-Entry
-    ↓
-Risk Management
-    ↓
-Trade Management
+htf_bias=bullish  (1h/4h EMA20>EMA50)
+   ↓
+pullback_to_anchor=True  (LTF dipped into HTF bias, resumed)   [marketcontext]
+   ↓
+price enters Bullish OB  → ob_bull=True  + discount=True
+   ↓
+liq_sweep=True (EQ-low swept, reclaimed) + eq_low=True
+   ↓
+choch=True (first HL after a bear leg) → bos=True (HH printed)
+   ↓
+displacement_z high (strong bullish candle, not exhaustion)
+   ↓
+decide() → long_score ≥ 0.90 → ENTRY(BUY)
+   ↓
+Gate A (spread<5bps, cooldown, liquidity) + Gate B (SL<entry, lev≤cap)
+   ↓
+target next sell-side liquidity (EQ-high / prior high)
 ```
 
-Never reverse this sequence by searching for entries before establishing trend and context.
+### Typical SHORT workflow (symmetric — first-class, not mirrored)
+```
+htf_bias=bearish
+   ↓
+pullback_to_anchor=True
+   ↓
+price enters Bearish OB → ob_bear=True + premium=True
+   ↓
+liq_sweep=True (EQ-high swept, rejected) + eq_high=True
+   ↓
+bearish choch + bos
+   ↓
+decide() → short_score ≥ 0.90 → ENTRY(SELL)
+   ↓
+Gate B enforces SL>entry
+   ↓
+target next buy-side liquidity (EQ-low / prior low)
+```
 
 ---
 
-# AI Decision Framework
+## 5. Decision Hierarchy (unchanged, now with the SMC owner noted)
 
-When evaluating a potential trade, the AI should answer these questions in order:
-
-## Trend
-
-- What is the higher timeframe trend?
-- Are the Daily 20 EMA and Daily 50 EMA aligned?
-- Is the market trending or ranging?
-
----
-
-## Bias
-
-- Bullish
-- Bearish
-- Neutral
-- No Trade
-
----
-
-## Liquidity
-
-Where is liquidity located?
-
-Examples:
-
-- Buy-side Liquidity
-- Sell-side Liquidity
-- Equal Highs
-- Equal Lows
-- Previous Highs
-- Previous Lows
+```
+Trend (regime_score + htf_bias)
+  ↓
+Bias (BUY / SELL / WATCH / SKIP)        ← decide() dual-score
+  ↓
+Liquidity (liq_sweep, eq_*, fvg)        ← smc.py + liquidity_score
+  ↓
+Market Structure (hh/hl/lh/ll, bos, choch) ← smc.py + structure_score
+  ↓
+Confirmation (displacement + sweep + choch) ← smc.py
+  ↓
+Entry (price/SL/TP/R:R)                  ← orchestrator + Gate B
+  ↓
+Risk Management (SL beyond liquidity)    ← Gate B + monitoring
+  ↓
+Trade Management (trailing/maxhold)      ← lifecycle + monitor
+```
+Never reverse this order — entries are searched for **only after** trend + context exist.
 
 ---
 
-## Institutional Zones
+## 6. AI / Engine Decision Framework (Vaiśravaṇa phrasing)
 
-Identify:
+The engine answers, *in order*, per `MarketState`:
 
-- Order Blocks
-- Fair Value Gaps
-- Breaker Blocks
-- Mitigation Blocks
-- Premium Zones
-- Discount Zones
-
----
-
-## Market Structure
-
-Evaluate:
-
-- HH (Higher High)
-- HL (Higher Low)
-- LH (Lower High)
-- LL (Lower Low)
-
-Detect:
-
-- BOS
-- CHoCH
-- MSS (Market Structure Shift)
+- **Trend** — `regime` + `htf_bias`: trending_bull/bear, range, breakout, high_vol?
+- **Bias** — `decide()` returns `side ∈ {BUY, SELL, None}` + `decision ∈ {ENTRY, WATCH, SKIP}`.
+- **Liquidity** — `liq_sweep`, `eq_high`, `eq_low`, `fvg`: where is the pool?
+- **Institutional zones** — `ob_bull`, `ob_bear`, `breaker`, `mitigation`, `premium`, `discount`.
+- **Market structure** — `hh/hl/lh/ll`, `bos`, `choch` (the swing sequence + MSS).
+- **Confirmation** — sweep cleared + structure confirms + displacement present.
+- **Entry** — `entry_price`, `sl_price`, `tp_price`, R:R (orchestrator from ATR mults).
 
 ---
 
-## Confirmation
+## 7. Guiding Principles (the project's, made explicit)
 
-Before entry verify:
-
-- Liquidity has been swept
-- Structure confirms direction
-- Strong displacement exists
-- Momentum supports continuation
-
----
-
-## Entry
-
-Determine:
-
-- Entry price
-- Stop Loss
-- Invalidation point
-- Profit targets
-- Risk-to-Reward ratio
+- Trend provides **context**, not an entry. SMC provides **execution precision**, not trend.
+- Liquidity **attracts** price; institutions take liquidity *before* the real move.
+- Structure carries more information than any single candle — the detector reads the
+  **sequence**, not the last bar.
+- Confirmation precedes execution; no CHoCH/sweep → no trade.
+- Patience is a strategic advantage — the 0.90 bar is *designed* to fire rarely.
+- A high-probability setup = multiple **aligned** factors, not one indicator.
+- **Symmetry**: LONG and SHORT are evaluated as independent counters (doc 30 §5). The
+  detector must never assume "SMC for longs, mirror for shorts."
 
 ---
 
-# Guiding Principles
+## 8. What the plug-in changes (summary)
 
-The AI should internalize the following principles:
+| Before (doc 40 §1.4) | After (`smc.py` plug-in) |
+|----------------------|--------------------------|
+| `fvg = bos` (coupled booleans) | `fvg` = independent 3-candle imbalance |
+| sweep = one-bar reclaim vs prior-20 extremes | sweep = wick-through + displacement + EQ-pool hit |
+| no OB / breaker / premium-discount | OB + breaker + mitigation + premium/discount detected |
+| structure+liquidity at dataclass floors in many bars | both factors populated every bar they apply |
+| 25% of scoring weight effectively dead live | 25% of weight now carries real alpha |
 
-- Trend provides context, not an entry.
-- SMC provides execution, not trend direction.
-- Liquidity attracts price.
-- Institutions often seek liquidity before initiating major moves.
-- Market structure carries more informational value than individual candlesticks.
-- Confirmation reduces false signals and should precede execution.
-- Patience is a strategic advantage; not every setup is tradable.
-- A high-probability setup is the result of multiple aligned factors, not a single indicator.
-
----
-
-# Summary
-
-The Moving Average and Smart Money Concepts serve complementary roles:
-
-**Multi-Timeframe Moving Average**
-
-Answers:
-
-> **"What side of the market should I be trading?"**
-
-Provides:
-
-- Trend
-- Bias
-- Momentum
-- Dynamic Support/Resistance
+See [`smc-scoring-impact.md`](smc-scoring-impact.md) for the quantified lift and
+[`smc-verification.md`](smc-verification.md) for how to *measure* it on real data.
 
 ---
 
-**Smart Money Concepts**
+## 9. Summary
 
-Answers:
+MTF MA answers **"which side of the market?"** (trend 30%). SMC answers **"where, and is
+it real?"** (structure 15% + liquidity 10%). `decide_ctx` answers **"does the market's
+rudder agree?"** (BTC leader + MTF stack). Together, top-down trend → micro SMC execution
+→ relational confirmation produces a *sparse, high-confluence* entry stream — the exact
+shape the ≥85% WR target requires.
 
-> **"Where should I enter, protect, and manage the trade?"**
-
-Provides:
-
-- Institutional Context
-- Liquidity Mapping
-- Market Structure
-- Entry Precision
-- Risk Placement
-- Trade Management
-
-Together, they form a structured, top-down decision-making process that combines macro trend analysis with micro execution. Rather than relying on isolated signals, the methodology emphasizes context, confirmation, and disciplined risk management to improve the quality and consistency of trading decisions.
+> **Next files:** implement the detector ([`smc-detector.md`](smc-detector.md)), prove the
+> score lift ([`smc-scoring-impact.md`](smc-scoring-impact.md)), wire it
+> ([`smc-wiring.md`](smc-wiring.md)), verify it ([`smc-verification.md`](smc-verification.md)).

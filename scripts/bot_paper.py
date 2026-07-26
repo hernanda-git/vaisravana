@@ -32,7 +32,7 @@ from sentinel import Sentinel
 from evaluation import evaluate
 from llm_research import LLMResearcher, NarrativeResearcher, ZenClient
 from config import default_surface  # noqa: E402
-from db import init_db  # noqa: E402
+from db import init_db, db_stats  # noqa: E402
 from decision import DecisionOrchestrator  # noqa: E402
 from engines import MarketState  # noqa: E402
 from lifecycle import TradeLifecycle  # noqa: E402
@@ -305,6 +305,12 @@ def run() -> None:
     # without waiting for a trade. UTC region from fly.toml primary_region.
     region = os.getenv("FLY_REGION", os.getenv("VAISRAVANA_REGION", "sin"))
     notifier.notify_health_check(ver, region, len(open_trades), feed_ok=True)
+    # doc 43: DB awareness on boot -> overall win rate + row counts + on-disk size,
+    # so the owner immediately sees database growth without waiting for the 30m cycle.
+    try:
+        notifier.notify_db_stats(ver, db_stats(conn, DB_PATH))
+    except Exception as e:  # never let a stats card break boot
+        log.debug("db_stats card failed: %s", e)
 
     # Phase 11: start the offline LLM research loop (propose-only Sentinel).
     # Default OFF -> bot is 100% deterministic, identical to before.
@@ -649,7 +655,18 @@ def _report_status(conn: sqlite3.Connection, notifier: TelegramNotifier) -> None
                      f"Exp={rep.expectancy_r:+.2f}R")
     if not lines:
         lines.append("_Belum ada trade dieksekusi._")
-    notifier.notify_status_30m(lines)
+    # portfolio-wide win rate + DB growth awareness (doc 43)
+    stats = db_stats(conn, DB_PATH)
+    o = stats["overall"]
+    overall = (f"<b>WR total</b>  : <code>{o['win_rate_pct']:.1f}%</code> "
+               f"({o['n_wins']}W / {o['n_losses']}L · {o['n_closed']} closed)")
+    dbline = (f"<b>DB</b>        : <code>{stats['size_human']}</code> · "
+              f"<code>{stats['total_rows']}</code> row "
+              f"(trades <code>{stats['counts'].get('trade_logs', 0)}</code>, "
+              f"decisions <code>{stats['counts'].get('decisions_log', 0)}</code>)")
+    notifier.notify_status_30m(lines, overall=overall, dbline=dbline)
+    # standalone DB card with the full per-table breakdown + on-disk size
+    notifier.notify_db_stats(vmod.read_version(), stats)
 
 
 if __name__ == "__main__":

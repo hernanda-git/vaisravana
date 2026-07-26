@@ -131,3 +131,81 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
 
 def all_tables_present(conn: sqlite3.Connection) -> bool:
     return all(table_exists(conn, t) for t in TABLES)
+
+
+def _fmt_bytes(n: int) -> str:
+    """Human-readable byte size (B / KB / MB / GB)."""
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024.0 or unit == "TB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TB"
+
+
+def db_stats(conn: sqlite3.Connection, db_path: str | Path | None = None) -> dict:
+    """Return operational DB stats so the owner can watch size + activity.
+
+    - counts:      row count per telemetry table (doc 30 §4 order)
+    - total_rows:  sum of all table rows
+    - size_bytes:  on-disk footprint of the main DB file + WAL + SHM sidecars
+    - size_human:  pretty-printed size (e.g. "1.4 MB")
+    - overall:     {n_closed, n_wins, n_losses, win_rate_pct} across ALL trade_logs
+                   (a single portfolio-wide win rate, not per pair/tf/side)
+
+    db_path is optional: when omitted, the size is read from the connection's
+    'main' database file via PRAGMA (page_count * page_size), which also counts
+    freelist pages, so it matches the true allocated footprint.
+    """
+    counts: dict[str, int] = {}
+    for t in TABLES:
+        try:
+            counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        except sqlite3.Error:
+            counts[t] = 0
+    total_rows = sum(counts.values())
+
+    # overall (portfolio-wide) win rate across every closed trade
+    n_closed = n_wins = 0
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(win), 0) FROM trade_logs "
+            "WHERE ts_fully_closed IS NOT NULL OR close_reason IS NOT NULL"
+        ).fetchone()
+        n_closed, n_wins = int(row[0]), int(row[1])
+    except sqlite3.Error:
+        pass
+    n_losses = max(0, n_closed - n_wins)
+    win_rate_pct = (100.0 * n_wins / n_closed) if n_closed else 0.0
+
+    # on-disk size: prefer real files (main + -wal + -shm); fall back to PRAGMA
+    size_bytes = 0
+    if db_path is not None and str(db_path) not in (":memory:", ""):
+        p = Path(db_path)
+        for suffix in ("", "-wal", "-shm"):
+            fp = Path(str(p) + suffix)
+            try:
+                if fp.exists():
+                    size_bytes += fp.stat().st_size
+            except OSError:
+                pass
+    if size_bytes == 0:
+        try:
+            pc = conn.execute("PRAGMA page_count").fetchone()[0]
+            ps = conn.execute("PRAGMA page_size").fetchone()[0]
+            size_bytes = int(pc) * int(ps)
+        except sqlite3.Error:
+            size_bytes = 0
+
+    return {
+        "counts": counts,
+        "total_rows": total_rows,
+        "size_bytes": size_bytes,
+        "size_human": _fmt_bytes(size_bytes),
+        "overall": {
+            "n_closed": n_closed,
+            "n_wins": n_wins,
+            "n_losses": n_losses,
+            "win_rate_pct": round(win_rate_pct, 1),
+        },
+    }

@@ -7,7 +7,7 @@
 ### A stability-first, high-win-rate crypto-futures trading system
 
 [![Status](https://img.shields.io/badge/status-paper--phase%20implemented-blue)](docs/34-implementation-status.md)
-[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen)](docs/34-implementation-status.md)
+[![Tests](https://img.shields.io/badge/tests-133%20passing-brightgreen)](docs/34-implementation-status.md)
 [![Win Rate Target](https://img.shields.io/badge/win%20rate-%E2%89%A585%25-brightgreen)](docs/30-concrete-spec.md)
 [![Drawdown](https://img.shields.io/badge/max%20drawdown-%3C%203%25-orange)](docs/25-safety-shadow-rollback.md)
 [![Timeframes](https://img.shields.io/badge/timeframes-5m%20%7C%2010m%20%7C%2015m-9cf)](docs/30-concrete-spec.md)
@@ -27,7 +27,7 @@ The system's prime directive is the **preservation** of capital through stable, 
 
 > [!NOTE]
 > **Design docs + tested implementation.** 35 interlinked design documents *plus* a tested
-> Python implementation (`src/`, 125 offline tests): 9 engines → two-layer gate → paper
+> Python implementation (`src/`, 133 offline tests): 9 engines → two-layer gate → paper
 > execution → evaluation → bounded Sentinel → promotion gate (human-approved) → monitoring.
 > Status: [docs/34-implementation-status.md](docs/34-implementation-status.md). PAPER-only —
 > no live path exists without explicit human approval (now enforced structurally by
@@ -207,6 +207,27 @@ A `correlation_id` threads every table, so a single trade's full life is reconst
 [![Logging coverage](https://img.shields.io/badge/trade_logs-100%25%20of%20wins%20%26%20losses-success)](docs/22-telemetry.md)
 [![Decisions](https://img.shields.io/badge/decisions_log-confidence%20%25-informational)](docs/30-concrete-spec.md)
 [![History](https://img.shields.io/badge/results_log-eval%20%7C%20reason%20%7C%20correct-blue)](docs/26-documentation-output.md)
+
+### 📟 Monitoring & DB awareness (Telegram)
+
+The bot pushes live cards to Telegram so you never have to SSH in to know its state.
+Every card is HTML-formatted (raw `v0.0.9`, no backslashes / em-dashes; doc 43):
+
+| Card | When | Contents |
+|------|------|----------|
+| 🤖 **Startup** | every (re)deploy | version, pairs, decision/context TFs, cycle, mode, LLM, open positions |
+| 🚀 **Deploy** | every (re)deploy | version + changelog of what shipped |
+| 💓 **Health check** | every (re)deploy | liveness, region, open positions, UTC time |
+| 🗄️ **Database** | **boot + every 30m** | **overall win rate** (W/L/closed), **DB size on disk**, **total rows**, and **per-table row counts** (trade_logs / decisions_log / results_log / exec_events / system_health) |
+| 📊 **Status (30m)** | every 30m | leads with **WR total** + a compact **DB size · rows** line, then per-(pair,tf,side) WR/expectancy |
+| 🟢 **Decision / fill / close** | per event | entry/SL/TP, R-multiple PnL, win/loss |
+| 🚀 **Promotion** | ≥20 trades & gates pass | flags a series SHADOW READY (needs human approval to go live) |
+| 🛑 **Kill-switch** | on trip | reason (daily-loss / frozen feed / ADL) |
+
+> The **Database** card is the one to watch for storage: it reports the true on-disk footprint
+> (main DB + `-wal` + `-shm` sidecars) so you can see the SQLite volume grow before it becomes
+> a problem. The overall win rate is portfolio-wide (across *all* closed trades), distinct from
+> the per-(pair,tf,side) win rate used by the 85% promotion gate.
 
 ---
 
