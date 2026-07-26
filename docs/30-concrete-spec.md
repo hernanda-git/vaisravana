@@ -266,7 +266,11 @@ CREATE TABLE system_health (
 > lewat `SELECT * FROM exec_events WHERE correlation_id=?` dst. Basis auto-review Sentinel
 > (`24`) & postmortem (`26`).
 
-> Logger TIDAK BOLEH gagal silently → alarm + hentikan entry. Jangan purge tabel.
+> **Storage note (implementation):** doc columns use `TIMESTAMPTZ` conceptually; in SQLite
+> the timestamp columns are stored as `TEXT` (ISO-8601). The `system_health.check` column is
+> a SQLite reserved word, so it is quoted as `"check"` in DDL (`src/db.py`). Column names/
+> semantics otherwise unchanged. Logger TIDAK BOLEH gagal silently → alarm + hentikan entry.
+> Jangan purge tabel.
 
 ---
 

@@ -1,6 +1,16 @@
 # Firecrawl CLI cache
 .firecrawl/
 
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Local DB (created at runtime)
+*.db
+*.db-journal
+
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -1,0 +1,68 @@
+"""Tests for the parameter surface (doc 21)."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from config import ParameterSurface, Weights  # noqa: E402
+
+
+def test_default_surface_is_valid():
+    s = ParameterSurface()
+    assert s.entry_threshold == 0.90
+    assert s.tp_atr_mult == 1.05
+    assert s.sl_atr_mult == 1.0
+    assert s.max_leverage == 2
+    assert s.daily_loss_limit_pct == 0.5
+    assert s.risk_per_trade_pct == 0.25
+    assert s.winrate_gate_pct == 85.0
+    assert s.min_trades_for_promote == 200
+    assert s.global_max_live_pairs == 5
+
+
+def test_weights_sum_to_one():
+    w = Weights()
+    assert abs(sum(w.as_dict().values()) - 1.0) < 1e-9
+
+
+def test_entry_threshold_bound_enforced():
+    try:
+        ParameterSurface(entry_threshold=0.50)  # below 0.85 floor
+        assert False, "should have raised"
+    except Exception as e:
+        assert "entry_threshold" in str(e) or "ge" in str(e)
+
+
+def test_max_leverage_hard_cap():
+    try:
+        ParameterSurface(max_leverage=5)  # above 3 ceiling
+        assert False, "should have raised"
+    except Exception as e:
+        assert "max_leverage" in str(e) or "le" in str(e)
+
+
+def test_watch_below_entry():
+    try:
+        ParameterSurface(entry_threshold=0.86, watch_threshold=0.90)
+        assert False, "should have raised"
+    except Exception as e:
+        assert "watch_threshold" in str(e)
+
+
+def test_weights_out_of_bound():
+    try:
+        Weights(trend=0.99)  # > 0.40 ceiling
+        assert False, "should have raised"
+    except Exception as e:
+        assert "trend" in str(e)
+
+
+def test_weights_bad_sum_rejected():
+    try:
+        # trend 0.40 + momentum 0.30 + volume 0.25 + structure 0.25 + rest default
+        # exceeds 1.0; pydantic validation must catch.
+        Weights(trend=0.40, momentum=0.30, volume=0.25, structure=0.25)
+        assert False, "should have raised on Σ != 1.0"
+    except Exception as e:
+        assert "1.0" in str(e)

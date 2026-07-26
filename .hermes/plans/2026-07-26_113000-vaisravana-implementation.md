@@ -20,7 +20,7 @@ All state persists to SQLite (`docs/30` §4 schemas).
 `pytest` (TDD) · `schedule` or `asyncio` (loop) · `loguru` (logger that fails loud).
 
 **Hard constraints (non-negotiable, from docs):**
-- Default mode = `PAPER`/UNREAL. **No live capital until per-pair×TF gate passes** (`doc 30` §1, §6).
+- Default mode = `PAPER`/UNREAL. **No live capital until per-(pair×tf×side) gate passes** (`doc 30` §1, §6).
 - No external signals. Bot decides internally (`doc 30` §4, README "No Signals").
 - Sentinel may **only** edit the bounded parameter surface in `doc 21`; never engine logic,
   execution code, or telemetry schema.
@@ -29,23 +29,27 @@ All state persists to SQLite (`docs/30` §4 schemas).
 
 ---
 
-## Phase 0 — Repo & Project Skeleton (infra)
+## Phase 0 — Repo & Project Skeleton (infra)  ✅ DONE (2026-07-26)
 
 **Objective:** Establish a runnable Python package with config, logging, and DB bootstrap so
 every later phase has a home.
 
 **Execution plan (bite-sized):**
-1. Create `pyproject.toml` (deps: python-binance, pydantic, pandas, numpy, loguru, pytest).
-2. Create package dirs: `src/vaisravana/{config,data,engines,gate,execution,sentinel,telemetry}`.
-3. `src/vaisravana/config/schema.py` — pydantic `ParameterSurface` mirroring **every row of
-   `doc 21`** (weights sum=1 enforced, bounds as `Field(ge=, le=)`). This is the Sentinel's
-   only writable contract.
-4. `src/vaisravana/telemetry/db.py` — `init_db()` that executes the **exact SQL in `doc 30` §4**
-   (`trade_logs`, `decisions_log`, `results_log`, `exec_events`, `system_health`).
-5. `conftest.py` with a temp DB fixture; test that `init_db()` creates all 5 tables.
-6. Commit.
+1. Create `pyproject.toml` (deps: pydantic, pytest).  ✅
+2. Create package dirs: `src/` (flat modules — deviation from nested `src/vaisravana/...`,
+   simpler for early phases; can refactor later).  ✅
+3. `src/config.py` — pydantic `ParameterSurface` mirroring **every row of `doc 21`** (weights
+   sum=1 enforced, bounds as `Field(ge=, le=)`, entry>watch invariant).  ✅
+4. `src/db.py` — `init_db()` that executes the **exact SQL in `doc 30` §4** (5 tables).  ✅
+   Deviations recorded back into doc 30 §4: `TIMESTAMPTZ` → `TEXT` (ISO-8601); `system_health.check`
+   quoted as `"check"` (SQLite reserved word).
+5. `tests/test_config.py`, `tests/test_db.py` — TDD; **11 tests passing**.  ✅
+6. Commit + push.  ✅
 
-**Validation:** `pytest` green; `sqlite3 test.db ".tables"` lists all 5 tables.
+**Validation:** `pytest` green (11 passed); `.venv/Scripts/python -m pytest`. Schema creates all
+5 tables; `ParameterSurface` rejects out-of-bound / non-∑1.0 / watch≥entry inputs.
+
+**Next:** Phase 1 (Data + Symbol Registry).
 
 ---
 

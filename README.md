@@ -286,6 +286,27 @@ Regime + HTF bias (1h/4h) → pick direction:
 
 ---
 
+## 💻 Code (Phase 0 — scaffolding)
+
+The design is being implemented in Python 3.11 (pytest + pydantic, stdlib `sqlite3`).
+
+```text
+src/config.py   ParameterSurface — Sentinel-editable params (doc 21) w/ bounds + Σweights=1.0
+src/db.py       init_db() — telemetry schema verbatim from doc 30 §4 (5 tables)
+tests/          pytest suite — TDD per phase (11 passing)
+```
+
+```bash
+uv venv && uv pip install -r <(uv pip compile pyproject.toml)   # or: uv pip install pydantic pytest
+.venv/Scripts/python -m pytest                                  # 11 passed
+```
+
+> **Status:** Phase 0 (skeleton) done. Phases 1–10 per
+> [`.hermes/plans/2026-07-26_113000-vaisravana-implementation.md`](.hermes/plans/2026-07-26_113000-vaisravana-implementation.md).
+> No live capital until the §6 promotion gate is passed on unreal.
+
+---
+
 <div align="center">
 
 **⭐ If this design is useful, star the repo. Documentation is the strategy.**
