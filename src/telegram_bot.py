@@ -2,24 +2,26 @@
 
 Mirrors learnernoearner-listener's notifier exactly:
   - env TELEGRAM_BOT_TOKEN + NOTIFY_CHAT_ID (Fly secrets) -> Bot API -> your channel
-  - MarkdownV2 with a correct escaper on every dynamic field, so "can't parse entities"
-    never eats an alert and never shows raw backslashes
-  - MarkdownV2 attempt, then plain-text fallback so a notification is NEVER silently lost
+  - HTML parse mode (robust: only & < > need escaping; version/dots/dashes/parens are
+    safe, so "v0.0.8" always renders raw and never shows literal backslashes)
+  - HTML attempt, then plain-text fallback (tags stripped) so a notification is NEVER
+    silently lost
   - 3950-char truncation guard (Telegram caps at 4096)
 
 This bot is PAPER-only (no live orders). It reports the startup card, health checks,
 decisions, fills, closes, promotions, kill-switch trips, and periodic status in one
 Telegram channel.
 
-Rendering policy (fixes the old backslash / em-dash artifacts):
-  - Versions and codes are passed RAW (they are controlled `[digits.]digits` strings).
-  - Em-dashes are never used; clean separators (·, :, -) only.
-  - All free-text (reasons, changelog, titles) goes through `mdv2_escape`.
+Rendering policy (fixes the old backslash / em-dash artifacts, doc 43):
+  - Versions and codes go inside <code> -> render raw as v0.0.8 (never v0\\.0\\.8).
+  - Em-dashes (—) are never used; clean separators (·, :, -) only.
+  - All free-text (reasons, changelog, titles) goes through html_escape.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,15 +29,18 @@ import httpx
 
 log = logging.getLogger("vaisravana.notifier.telegram")
 
-# MarkdownV2 special characters that MUST be backslash-escaped when literal.
-_MDV2_SPECIAL = r"_*[]()~`>#+-=|{}.!"
+_TAG_RE = re.compile(r"<[^>]+>")
 
 
-def mdv2_escape(text: str) -> str:
-    """Escape Telegram MarkdownV2 special chars in dynamic content."""
-    if not text:
-        return text
-    return "".join("\\" + c if c in _MDV2_SPECIAL else c for c in str(text))
+def html_escape(text: str) -> str:
+    """Escape the three HTML-significant chars in dynamic content."""
+    if text is None:
+        text = ""
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _strip_tags(text: str) -> str:
+    return _TAG_RE.sub("", text)
 
 
 class TelegramNotifier:
@@ -51,20 +56,20 @@ class TelegramNotifier:
             self._client = httpx.Client(timeout=10)
         return self._client
 
-    def send_message(self, text: str) -> bool:
+    def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
         if self._chat_dead:
             return False
         MAX_LEN = 3950
         if len(text) > MAX_LEN:
             text = text[:MAX_LEN - 40] + "\n\n… (truncated)"
         if not self.bot_token:
-            log.info("[No bot token] %s", text[:100])
+            log.info("[No bot token] %s", _strip_tags(text)[:100])
             return False
         client = self._get_client()
         resp = client.post(f"{self._base}/sendMessage", json={
             "chat_id": self.chat_id,
             "text": text,
-            "parse_mode": "MarkdownV2",
+            "parse_mode": parse_mode,
             "disable_web_page_preview": True,
         })
         if resp.status_code == 200:
@@ -78,10 +83,11 @@ class TelegramNotifier:
                       "until restart. Add the bot to the chat or fix NOTIFY_CHAT_ID.",
                       self.chat_id, resp.text[:80])
             return False
-        if "parse entities" in resp.text:
+        if parse_mode != "plain" and "parse entities" in resp.text:
+            plain = _strip_tags(text)
             resp2 = client.post(f"{self._base}/sendMessage", json={
                 "chat_id": self.chat_id,
-                "text": text,
+                "text": plain,
                 "disable_web_page_preview": True,
             })
             if resp2.status_code == 200:
@@ -97,18 +103,20 @@ class TelegramNotifier:
                         side: str, reason: str) -> bool:
         icon = {"ENTRY": "🟢", "WATCH": "👁", "SKIP": "⏭"}.get(action, "•")
         text = (
-            f"{icon} *{action}* `{pair} {tf}`\n"
-            f"side: `{side or '-'}` · score: `{score:.3f}`\n"
-            f"_{mdv2_escape(reason)}_"
+            f"{icon} <b>{html_escape(action)}</b> <code>{html_escape(pair)} {html_escape(tf)}</code>\n"
+            f"side: <code>{html_escape(side or '-')}</code> · score: <code>{score:.3f}</code>\n"
+            f"<i>{html_escape(reason)}</i>"
         )
         return self.send_message(text)
 
     def notify_fill(self, pair: str, tf: str, side: str, entry: float,
                     sl: float, tp: float, lev: float) -> bool:
         text = (
-            f"📈 *PAPER FILL* `{pair} {tf}` `{side}`\n"
-            f"entry: `{entry:.2f}` · sl: `{sl:.2f}` · tp: `{tp:.2f}` · lev: `{lev}x`\n"
-            f"🕐 _{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
+            f"📈 <b>PAPER FILL</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
+            f"<code>{html_escape(side)}</code>\n"
+            f"entry: <code>{entry:.2f}</code> · sl: <code>{sl:.2f}</code> · "
+            f"tp: <code>{tp:.2f}</code> · lev: <code>{lev}x</code>\n"
+            f"🕐 <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>"
         )
         return self.send_message(text)
 
@@ -116,22 +124,23 @@ class TelegramNotifier:
                      reason: str, pnl_r: float, win: bool) -> bool:
         emoji = "✅" if win else "❌"
         text = (
-            f"{emoji} *CLOSE* `{pair} {tf}` `{side}` ({mdv2_escape(reason)})\n"
-            f"exit: `{exit_price:.2f}` · PnL: `{pnl_r:+.2f}R`"
+            f"{emoji} <b>CLOSE</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
+            f"<code>{html_escape(side)}</code> ({html_escape(reason)})\n"
+            f"exit: <code>{exit_price:.2f}</code> · PnL: <code>{pnl_r:+.2f}R</code>"
         )
         return self.send_message(text)
 
     def notify_promotion(self, pair: str, tf: str, kind: str, review: str) -> bool:
         text = (
-            f"🚀 *SENTINEL {kind}* `{pair} {tf}`\n"
-            f"_{mdv2_escape(review)}_"
+            f"🚀 <b>SENTINEL {html_escape(kind)}</b> <code>{html_escape(pair)} {html_escape(tf)}</code>\n"
+            f"<i>{html_escape(review)}</i>"
         )
         return self.send_message(text)
 
     def notify_kill_switch(self, reason: str) -> bool:
         text = (
-            f"🛑 *KILL-SWITCH TRIPPED*\n"
-            f"_{mdv2_escape(reason)}_\n"
+            f"🛑 <b>KILL-SWITCH TRIPPED</b>\n"
+            f"<i>{html_escape(reason)}</i>\n"
             f"paper loop halted - no further entries until cooldown clears."
         )
         return self.send_message(text)
@@ -141,21 +150,21 @@ class TelegramNotifier:
                        open_n: int) -> bool:
         """Clean, modern startup card (Bahasa Indonesia, brand Vessavaṇa).
 
-        Version is passed RAW (no escaping) so it renders as `v0.0.7`, never `v0\\.0\\.7`.
-        No em-dashes are used; clean `·` / `:` separators only.
+        Version is rendered inside <code> -> shows as v0.0.8 (raw, no backslashes).
+        No em-dashes are used; clean · / : separators only.
         """
         pair_s = " · ".join(pairs)
         ctx_s = " · ".join(ctx_tfs)
         text = (
-            f"🤖 *Vessavaṇa* · *Bot PAPER aktif* `v{version}`\n"
+            f"🤖 <b>Vessavaṇa</b> · <b>Bot PAPER aktif</b> <code>v{html_escape(version)}</code>\n"
             f"\n"
-            f"*Pasangan*  : `{pair_s}`\n"
-            f"*Keputusan* : `{decide_tf}` · eksekusi saat candle tutup\n"
-            f"*Konteks*   : `{ctx_s}` · bias multi-timeframe\n"
-            f"*Siklus*    : `{cycle_s} dtk`\n"
-            f"*Mode*      : `PAPER` · tanpa order live\n"
-            f"*LLM*       : `{llm_mode}`\n"
-            f"*Posisi*    : `{open_n}` · dimuat ulang\n"
+            f"<b>Pasangan</b>  : <code>{html_escape(pair_s)}</code>\n"
+            f"<b>Keputusan</b> : <code>{html_escape(decide_tf)}</code> · eksekusi saat candle tutup\n"
+            f"<b>Konteks</b>   : <code>{html_escape(ctx_s)}</code> · bias multi-timeframe\n"
+            f"<b>Siklus</b>    : <code>{cycle_s} dtk</code>\n"
+            f"<b>Mode</b>      : <code>PAPER</code> · tanpa order live\n"
+            f"<b>LLM</b>       : <code>{html_escape(llm_mode)}</code>\n"
+            f"<b>Posisi</b>    : <code>{open_n}</code> · dimuat ulang\n"
         )
         return self.send_message(text)
 
@@ -165,40 +174,39 @@ class TelegramNotifier:
         bot is alive and healthy without waiting for a trade to happen."""
         status = "sehat ✅" if feed_ok else "feed bermasalah ⚠️"
         text = (
-            f"💓 *Health Check* · `v{version}`\n"
+            f"💓 <b>Health Check</b> · <code>v{html_escape(version)}</code>\n"
             f"\n"
-            f"*Status*  : {status}\n"
-            f"*Region*  : `{region}`\n"
-            f"*Posisi*  : `{open_n}` terbuka\n"
-            f"*Waktu*   : _{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_\n"
+            f"<b>Status</b>  : {status}\n"
+            f"<b>Region</b>  : <code>{html_escape(region)}</code>\n"
+            f"<b>Posisi</b>  : <code>{open_n}</code> terbuka\n"
+            f"<b>Waktu</b>   : <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>\n"
         )
         if notes:
-            text += f"\n_{mdv2_escape(notes)}_"
+            text += f"\n<i>{html_escape(notes)}</i>"
         return self.send_message(text)
 
     def notify_deploy(self, version: str, changelog: str) -> bool:
         """Announce the deployed version + what changed (Bahasa Indonesia)."""
-        body = mdv2_escape(changelog).strip() if changelog else "_Belum ada catatan rilis._"
-        # keep each changelog line readable: replace leading '- ' bullets with '• '
+        body = (changelog or "").strip()
         lines = []
         for ln in body.split("\n"):
             ln = ln.strip()
             if not ln:
                 continue
             lines.append("• " + ln.lstrip("- ").lstrip("• "))
-        body = "\n".join(lines[:12]) or "_Belum ada catatan rilis._"
+        body = html_escape("\n".join(lines[:12])) or "<i>Belum ada catatan rilis.</i>"
         text = (
-            f"🚀 *Vessavaṇa `v{version}` ter-deploy*\n"
+            f"🚀 <b>Vessavaṇa <code>v{html_escape(version)}</code> ter-deploy</b>\n"
             f"\n"
-            f"*Perubahan:*\n"
+            f"<b>Perubahan:</b>\n"
             f"{body}"
         )
         return self.send_message(text)
 
     def notify_status(self, title: str, body_md: str) -> bool:
-        return self.send_message(f"📊 *{mdv2_escape(title)}*\n\n{body_md}")
+        return self.send_message(f"📊 <b>{html_escape(title)}</b>\n\n{body_md}")
 
     def notify_status_30m(self, lines: list[str]) -> bool:
         """Periodic 30m status card (Bahasa Indonesia)."""
-        body = "\n".join(lines) if lines else "_Belum ada trade dieksekusi._"
-        return self.send_message(f"📊 *Vessavaṇa - Status (30m)*\n\n{body}")
+        body = "\n".join(lines) if lines else "<i>Belum ada trade dieksekusi.</i>"
+        return self.send_message(f"📊 <b>Vessavaṇa - Status (30m)</b>\n\n{body}")

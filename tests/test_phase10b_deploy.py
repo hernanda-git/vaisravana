@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import pytest  # noqa: E402
 
-from telegram_bot import TelegramNotifier, mdv2_escape  # noqa: E402
+from telegram_bot import TelegramNotifier, html_escape  # noqa: E402
 from db import init_db  # noqa: E402
 from lifecycle import TradeLifecycle  # noqa: E402
 
@@ -27,7 +27,7 @@ class _FakeClient:
     def post(self, url, json=None):
         mode = json.get("parse_mode", "plain")
         self.calls.append(json)
-        if mode == "MarkdownV2" and self._mode == "markdown_broken":
+        if mode == "HTML" and self._mode == "markdown_broken":
             return _FakeResp(400, "Bad Request: can't parse entities")
         return _FakeResp(200)
 
@@ -42,17 +42,17 @@ class StubNotifier(TelegramNotifier):
 
 
 def test_mdv2_escape_escapes_special_chars():
-    out = mdv2_escape("BTC*USDT won +2.5R (entry 60_000)")
-    assert "\\*" in out and "\\+" in out and "\\_" in out
-    assert mdv2_escape("") == ""
+    # HTML mode: only & < > are escaped; version/classical chars are safe
+    assert html_escape("a<b>&c") == "a&lt;b&gt;&amp;c"
+    assert html_escape("") == ""
 
 
 def test_notify_decision_markdown_and_escapes_reason():
     n = StubNotifier()
     n.notify_decision("BTCUSDT", "5m", "ENTRY", 0.93, "BUY", "bos *hl* >50ema")
     body = n._client.calls[0]["text"]
-    assert "ENTRY" in body and "BTCUSDT" in body and "`BUY`" in body
-    assert "\\*" in body  # reason escaped
+    assert "ENTRY" in body and "BTCUSDT" in body and "<code>BUY</code>" in body
+    assert "&gt;" in body  # reason escaped for HTML
 
 
 def test_notify_fill_and_close_shape():
@@ -70,7 +70,7 @@ def test_plain_text_fallback_on_parse_entities():
     ok = n.notify_status("X", "weird * text _ here")
     assert ok is True
     # first call failed markdown, second plain-text succeeded
-    assert n._client.calls[0].get("parse_mode") == "MarkdownV2"
+    assert n._client.calls[0].get("parse_mode") == "HTML"
     assert "parse_mode" not in n._client.calls[1]
 
 
