@@ -8,6 +8,7 @@ Bot memutuskan sendiri dari engine → rekam sebagai `decisions_log` (bukan SIGN
 ```json
 {
   "ts": "2026-07-26T12:00:00Z",
+  "correlation_id": "C-10231",
   "pair": "BTCUSDT",
   "tf": "5m",
   "symbol": "BTCUSDT",
@@ -15,21 +16,27 @@ Bot memutuskan sendiri dari engine → rekam sebagai `decisions_log` (bukan SIGN
   "scores": {
     "trend": 28, "momentum": 17, "volume": 10,
     "structure": 13, "liquidity": 8, "atr": 5, "funding_oi": 5,
-    "total": 86
+    "long_score": 86, "short_score": 41
   },
   "decision": "ENTRY" | "WATCH" | "SKIP",
+  "side": "BUY" | "SELL",
+  "confidence_pct": 86,
+  "gate_a_pass": 1, "gate_b_pass": 1,
   "filters_passed": ["support", "volume_up", "htf_bull"],
   "filters_failed": ["momentum_exhausted"],
   "market_ctx": { "atr": 120, "avg_body": 45, "vol_z": 1.8, "liq_sweep": false }
 }
 ```
 
+> **Bidirectional:** `long_score` dan `short_score` dihitung terpisah (`doc 10`).
+> `side` = arah terpilih (BUY/SELL). `confidence_pct` = skor terpilih × 100.
+
 ## 2. Event: FILL (order terisi)
 ```json
 {
   "ts": "...", "trade_id": "T-10231",
   "side": "BUY", "entry": 64210.5, "size": 0.05,
-  "leverage": 3, "sl": 63800, "tp": 65100,
+  "leverage": 2, "sl": 63800, "tp": 65100,
   "config_version": "v1.4.2",
   "decision_snapshot": { /* copy scores + ctx dari DECISION */ }
 }
@@ -104,7 +111,7 @@ bukan-sinyal (slippage, partial fill, reject, latency).
 
 ## 8. Skema Wajib (konkret — pakai ini)
 Telemetry diimplementasikan sebagai tabel DB. Skema SQL pasti (tabel `trade_logs`,
-`decisions_log`, `exec_events`, `system_health`, `trade_logs`, `results_log`) ada di **`30-concrete-spec.md` §4**.
+`decisions_log`, `exec_events`, `system_health`, `results_log`) ada di **`30-concrete-spec.md` §4**.
 Gunakan skema itu sebagai sumber tunggal — jangan buat skema berbeda.
 
 > **Aturan emas logging:** `trade_logs` mencatat **SETIAP trade unreal (menang & kalah)**.

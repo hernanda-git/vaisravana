@@ -62,22 +62,23 @@ Mono-tugas kritis:
 
 ### 9. Trade Scoring Engine
 Setiap engine di atas mengembalikan skor (lihat [scoring system](10-scoring-system.md)).
-Robot **hanya entry kalau total skor > threshold** (mis. 80).
+Robot **hanya entry kalau skor terpilih > threshold tinggi (0.90, high-WR tuned — lihat `10-scoring-system.md`)**.
+Skor dihitung **dua arah** (`long_score`, `short_score`); arah = sisi dengan skor lebih tinggi.
 
 ## Alur Data (runtime)
 1. Kumpulkan data OHLCV + orderflow (delta/OI/funding) dari exchange.
 2. Setiap engine proses data → keluarkan sub-skor.
-3. Scoring Engine agregat → total score + arah.
-4. Risk Manager cek: apakah score cukup? apakah dalam cooldown? apakah sudah hit daily loss limit?
-5. Kalau lolos → hitung size/SL/TP via Volatility + Risk Manager → **OPEN**.
-6. Post-entry: trailing stop, monitoring, exit by TP/SL/structure break.
+3. Scoring Engine agregat → `long_score` + `short_score` (`doc 10`); pilih arah (BUY/SELL) = sisi skor lebih tinggi.
+4. Risk Manager cek: apakah score terpilih cukup? apakah dalam cooldown? apakah sudah hit daily loss limit?
+5. Kalau lolos (skor > 0.90) → hitung size/SL/TP via Volatility + Risk Manager → **OPEN posisi di arah tersebut** (LONG atau SHORT, SL sesuai arah).
+6. Post-entry: trailing stop, monitoring, exit by TP/SL/structure break/max-hold.
 
 ## Mengapa desain ini tangguh
 - **Tidak single-point-of-failure**: satu indikator salah ≠ rugi besar, karena butuh konfluensi.
 - **Adaptif**: regime detector mengubah bobot/strategi saat pasar berubah.
 - **Terukur**: setiap keputusan punya skor → bisa di-backtest & di-tuning.
 - **Aman**: Risk Manager sebagai gerbang terakhir (daily loss, cooldown).
-- **Isolasi per-pair×TF**: tiap ShadowTrader independen (`30` §8) → pair buruk tidak merusak lainnya.
+- **Isolasi per (pair×tf×side)**: tiap ShadowTrader independen (`30` §8) → kombinasi buruk tidak merusak lainnya. LONG dan SHORT dihitung sebagai counter terpisah.
 
 ## Langkah Implementasi (sarannya)
 Mulai dari: arsitektur (`ARCHITECTURE.md`) → `30-concrete-spec.md` → algoritma entry/exit

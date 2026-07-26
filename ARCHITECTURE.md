@@ -31,7 +31,7 @@
 |---|------|-----------------|---------|
 | G1 | **Time-sensitive accuracy** | YES | Decision→entry latency < 200ms; fill within 2s |
 | G2 | **Stability** | YES | Max drawdown (unreal & live) < 3% |
-| G3 | **High win rate (+85%)** | YES (target) | Per-pair/per-TF shadow WR ≥ 85% to promote to live |
+| G3 | **High win rate (+85%)** | YES (target) | Per-(pair×tf×side) shadow WR ≥ 85% to promote to live |
 | G4 | **Micro-timeframe trades** | YES | Trade windows: 5m, 10m, 15m |
 | G5 | **All Binance pairs tradable** | YES (universe) | Universe = all USDT perpetuals (liquidity-filtered) |
 | G6 | **Shadow-first** | YES | Zero live capital until gate passed on unreal |
@@ -52,7 +52,7 @@
 | P4 | **Bounded self-correction** | Sentinel edits only parameter surface (`21`), via shadow (`25`) |
 | P5 | **Dynamic reasoning** | 5W1H engine (`29`) handles novel situations, not just fixed rules (`28`) |
 | P6 | **Everything logged** | Every decision, fill, tp/close, health event persisted (`22`) |
-| P7 | **Per-pair / per-TF isolation** | Each pair×TF validated and pruned independently |
+| P7 | **Per-pair / per-TF / per-SIDE isolation** | Each (pair×tf×side) validated and pruned independently |
 | P8 | **Human-readable audit** | Every change documented automatically (`26`) |
 
 ---
@@ -78,7 +78,7 @@
         │                                  ▼                          │
         │  ┌─────────────────────────────────────────────────────┐  │
         │  │  MULTI-TIMEFRAME SHADOW ENGINE (5/10/15m × all pairs)│  │
-        │  │  • each pair×TF = independent shadow trader          │  │
+        │  │  • each (pair×TF×side) = independent shadow trader      │  │
         │  │  • logs unreal win/loss (G6)                          │  │
         │  │  • gates on +85% WR before any live (G3)             │  │
         │  └─────────────────────────────────────────────────────┘  │
@@ -114,7 +114,7 @@
 | C1 | Market Data Layer | Fan-out WS per pair×TF; gap/freeze detection; orderflow | `22`, `28-A/C` |
 | C2 | Feature/Engine Layer | 9 engines → per-pair sub-scores (regime, structure, liq, candle, vol, volat, MTF) | `11`, `01`–`08` |
 | C3 | Multi-TF Shadow Engine | Independent shadow trader per (pair×tf×side); records unreal WR per SIDE | `30` §3,`§5`,`§8` |
-| C4 | Scoring & Decision | Aggregate → total score → entry/watch/skip with high threshold | `10`, `09` |
+| C4 | Scoring & Decision | Dual score (long/short) → pick side → entry/watch/skip @ >0.90 | `10`, `09` |
 | C5 | Risk Manager | Per-pair sizing, global exposure cap, daily-loss kill switch | `11` §8, `25`, `30` §7 |
 | C6 | Execution | LIMIT orders, fill tracking, reject/partial handling | `28-B`, `30` §3 |
 | C7 | Telemetry Store | Persist every event (decision/fill/exit/health) | `22`, `30` §4 |
@@ -134,16 +134,17 @@ The core scaling piece. It runs **shadow (unreal) trades on 5m, 10m, 15m windows
 - New pairs auto-enter the universe; delisted/expired pairs auto-exit (`28-D`).
 
 ### 5.2 Isolation model
-```
+```text
 for each pair P in universe:
   for each TF in {5m, 10m, 15m}:
-     spawn ShadowTrader(P, TF)
-        - independent state, scores, WR counter
-        - logs every unreal trade to trade_logs (§22/§30)
-        - promotes to LIVE only if WR ≥ 85% over N trades (§6)
+    for each SIDE in {BUY, SELL}:
+       spawn ShadowTrader(P, TF, SIDE)
+          - independent state, scores, WR counter (per side)
+          - logs every unreal trade to trade_logs (§22/§30)
+          - promotes to LIVE only if WR ≥ 85% over N trades (§6)
 ```
-- Each `ShadowTrader` is isolated: a bad pair/TF cannot contaminate others (P7).
-- Sentinel can **disable** a single pair×TF without touching the rest.
+- Each `ShadowTrader` is isolated: a bad (pair/TF/side) cannot contaminate others (P7).
+- Sentinel can **disable** a single (pair×TF×side) without touching the rest.
 
 ### 5.3 Why 5/10/15m (not 1m)
 - Less noise & spread-sensitivity than 1m → easier to hit stable high WR (G3, G4).
@@ -164,8 +165,8 @@ High win rate is **engineered**, not hoped for. The levers:
 | Liquidity + structure | Enter after sweep, at support/resistance | High-probability zones |
 | Tight TP | Take profit at nearest logical target (R:R ~0.9–1.1) | Small wins accumulate; high hit rate |
 | Tight SL | 1.0–1.2 ATR | Small loss when wrong |
-| Per-pair shadow gate | Promote only if shadow WR ≥ 85% (N≥200 trades) | Live only proven setups |
-| Continuous pruning | Sentinel disables pair×TF if WR drops < 85% | Maintain portfolio WR |
+| Per-pair×per-TF×per-SIDE shadow gate | Promote only if shadow WR ≥ 85% (N≥200 trades, per side) | Live only proven setups |
+| Continuous pruning | Sentinel disables (pair×TF×side) if WR drops < 85% | Maintain portfolio WR |
 
 ### Expectancy check
 At 85% WR with R:R 1.0: expectancy ≈ 0.85×1R − 0.15×1R = **+0.70R per trade**.
@@ -173,26 +174,26 @@ Even R:R 0.8 → 0.85×0.8 − 0.15×1 = +0.53R. **Positive across a wide R:R ba
 why high WR is the chosen path to stability (P1).
 
 ### Measurement & gate (no fake claims)
-- `Evaluation Engine` computes **per-pair×per-TF WR** continuously (`23`).
-- `Promotion Gate` (§6 of `30`): live only after shadow WR ≥ 85% over ≥200 trades,
+- `Evaluation Engine` computes **per-(pair×tf×side) WR** continuously (`23`).
+- `Promotion Gate` (§6 of `30`): live only after shadow WR ≥ 85% over ≥200 trades (that side),
   expectancy > +0.2R, DD < 3%.
-- If a live pair×TF falls below 85% WR for a validation window → Sentinel reverts it to
+- If a live (pair×tf×side) falls below 85% WR for a validation window → Sentinel reverts it to
   shadow or disables it.
 
 ---
 
 ## 7. Two-Bot Loop (C10 ↔ Trader)
 
-```
-[every candle close on each pair×TF shadow]
-   → engines → score → decisions_log
-   → if ENTRY & checks pass → LIMIT order (PAPER) → trade_logs (open)
+```text
+[every candle close on each (pair×TF×side) shadow]
+   → engines → dual score → decisions_log
+   → if ENTRY & checks pass → LIMIT order (PAPER) → trade_logs (open, side)
 [on exit: TP/SL/trailing/maxhold]
-   → trade_logs update → AUTO-EVALUATE (rolling)
+   → trade_logs update → AUTO-EVALUATE per (pair×tf×side) (rolling)
 [window: 200 trades / daily]
    → eval_report → Sentinel REASON(5W1H) → review → correct(shadow) → promote
-[gate §6 passed + human approve]
-   → LIVE enabled for that pair×TF (shadow keeps running as baseline)
+[gate §6 (per side) passed + human approve]
+   → LIVE enabled for that (pair×TF×side) (shadow keeps running as baseline)
 ```
 Full detail: `27-feedback-loop.md`, `20-meta-system-overview.md`, `24-review-correction-bot.md`.
 

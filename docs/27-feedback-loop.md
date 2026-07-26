@@ -29,7 +29,7 @@ Cara keempat fase (evaluate → review → correct → improve) berputar secara 
            │
    [GATE §6 30-concrete-spec.md terpenuhi + approve manusia]
            ▼
-   LIVE diaktifkan **untuk pair×TF itu** (PAPER/SHADOW tetap jalan paralel sebagai baseline)
+   LIVE diaktifkan **untuk (pair, tf, SIDE) itu** (PAPER/SHADOW tetap jalan paralel sebagai baseline)
 ```
 
 > Di fase awal, belum ada Live — Shadow dibandingkan vs **Paper baseline** (`30` §6).
@@ -39,7 +39,7 @@ Cara keempat fase (evaluate → review → correct → improve) berputar secara 
 | Trigger | Frekuensi | Contoh |
 |---------|-----------|--------|
 | Tiap trade EXIT | realtime | update metrik |
-| Window rollup | harian / 50 trade | panggil review |
+| Window rollup | harian / 200 trade | panggil review |
 | Regime shift | event | re-eval bobot regime |
 | Drawdown event | event | circuit breaker + review paksa |
 | Losing streak | event | naikkan cooldown |

@@ -59,7 +59,7 @@ Leverage ceiling, Symbol registry, DB reachability. Logger gagal = alarm + stop 
 | Trigger | Aksi |
 |---------|------|
 | Drawdown harian > `daily_loss_limit_pct` | Tutup semua posi, mode PAPER, notif |
-| Losing streak ≥ N (mis. 7) | Cooldown paksa, naikkan `cooldown_after_loss` |
+| Losing streak ≥ N (mis. 5) | Cooldown paksa 30m, naikkan `cooldown_after_loss` |
 | Exchange/connection error | Hentikan entry, pertahankan manajemen posi terbuka |
 | 3x rollback berturut | Nonaktifkan auto-correct, mode supervised |
 | **ADL rank tinggi / liquidation imminent** | Kurangi leverage / tutup sebagian, notif |
