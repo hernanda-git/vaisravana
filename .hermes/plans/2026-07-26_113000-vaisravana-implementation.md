@@ -258,7 +258,12 @@ split; Sentinel runs on live shadow, not fitted weights.
 
 ---
 
-## Phase 10 — Live Cutover (human-gated) & Monitoring
+## Phase 10 — Live Cutover (human-gated) & Monitoring  ✅ CODE DONE (2026-07-26)
+
+> Dashboard + human alert stream implemented (`src/dashboard.py`, 4 tests): per-key
+> status, promotions/rollbacks/kill-switch/incidents all surfaced. Live cutover itself
+> remains an OPERATING decision — requires 200-trade WR≥85% paper stats per (pair,tf,side)
+> + `promotion_gate(human_approved=True)`. No code path can go live without the human flag.
 
 **Objective:** Safe go-live per pair×TF, with continuous monitoring and rollback.
 

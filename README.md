@@ -6,7 +6,8 @@
 
 ### A stability-first, high-win-rate crypto-futures trading system
 
-[![Status](https://img.shields.io/badge/status-documentation--complete-blue)](docs/33-paper.md)
+[![Status](https://img.shields.io/badge/status-paper--phase%20implemented-blue)](docs/34-implementation-status.md)
+[![Tests](https://img.shields.io/badge/tests-105%20passing-brightgreen)](docs/34-implementation-status.md)
 [![Win Rate Target](https://img.shields.io/badge/win%20rate-%E2%89%A585%25-brightgreen)](docs/30-concrete-spec.md)
 [![Drawdown](https://img.shields.io/badge/max%20drawdown-%3C%203%25-orange)](docs/25-safety-shadow-rollback.md)
 [![Timeframes](https://img.shields.io/badge/timeframes-5m%20%7C%2010m%20%7C%2015m-9cf)](docs/30-concrete-spec.md)
@@ -24,10 +25,11 @@ The system's prime directive is the **preservation** of capital through stable, 
 ---
 
 > [!NOTE]
-> **This repository is a complete design & knowledge base** — 33 interlinked markdown documents
-> covering market theory, a 9-engine architecture, a two-bot self-correcting system, full
-> telemetry schemas, and a technical paper. It is **not yet executable code**; the spec is
-> implementation-ready.
+> **Design docs + working implementation.** 33 interlinked design documents *plus* a tested
+> Python implementation (`src/`, 105 offline tests): 9 engines → two-layer gate → paper
+> execution → evaluation → bounded Sentinel → promotion gate (human-approved) → monitoring.
+> Status: [docs/34-implementation-status.md](docs/34-implementation-status.md). PAPER-only —
+> no live path exists without explicit human approval.
 
 ## ✨ Why Vaiśravaṇa
 
