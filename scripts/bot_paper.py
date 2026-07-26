@@ -275,6 +275,12 @@ def run() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     conn = init_db(DB_PATH)
+    # v0.1.0: on boot, immediately trim decisions_log older than 1 day so a long-lived
+    # or restarted bot never lets the spammy audit table grow unbounded.
+    try:
+        db.purge_old_decisions(conn)
+    except Exception as e:  # non-fatal — never block boot on housekeeping
+        log.debug("boot decisions_log purge skipped: %s", e)
     surface = load_surface()          # persisted promoted surface or default
     lc = TradeLifecycle(conn)
     tel = Telemetry(conn)
@@ -347,6 +353,15 @@ def run() -> None:
             if realized_loss_today["day"] != today:
                 realized_loss_today = {"usd": 0.0, "day": today}
                 kill.reset()  # fresh day -> clear any tripped kill-switch
+                # v0.1.0: prune the spammy decisions_log (>1 day old) at the daily roll
+                try:
+                    deleted = db.purge_old_decisions(conn)
+                    if deleted:
+                        notifier.send_message(
+                            f"🧹 **Vessavaṇa — DB prune**\n"
+                            f"decisions_log >1d dihapus: <code>{deleted}</code> baris")
+                except Exception as e:  # never let pruning break the loop
+                    log.debug("decisions_log purge failed: %s", e)
             daily_loss_pct = (realized_loss_today["usd"] / equity * 100.0) if equity else 0.0
             # mark feed health from the latest candle we just fetched
             for pair in PAIRS:

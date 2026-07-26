@@ -209,3 +209,41 @@ def db_stats(conn: sqlite3.Connection, db_path: str | Path | None = None) -> dic
             "win_rate_pct": round(win_rate_pct, 1),
         },
     }
+
+
+# Table that receives one row per (pair, strategy) per decision tick — by far the
+# highest-write table in the system (≈15 pairs × 3 strategies × 60s ≈ 65k rows/day).
+# Trade/execution logs are kept indefinitely (they drive evaluation + promotion), but
+# the decision audit trail is only useful for recent diagnostics, so it is pruned.
+DECISIONS_LOG_RETENTION_DAYS = 1
+
+
+def purge_old_decisions(
+    conn: sqlite3.Connection,
+    retention_days: int = DECISIONS_LOG_RETENTION_DAYS,
+    now: str | None = None,
+) -> int:
+    """Delete `decisions_log` rows older than `retention_days` (default 1) by UTC `ts`.
+
+    `ts` is ISO-8601 UTC TEXT (e.g. '2026-07-26T16:44:01+00:00'). The stored value carries a
+    '+00:00' offset, so the column is wrapped in datetime(ts) for a correct comparison against
+    datetime('now'/'-N days') — a raw `ts <` compare fails because of the suffix.
+    Returns rows deleted. Idempotent and safe: a missing table or empty result is a no-op.
+    """
+    cutoff = now or datetime.now(timezone.utc).isoformat()
+    try:
+        cur = conn.execute(
+            "DELETE FROM decisions_log WHERE datetime(ts) < datetime(?, '-%d days')"
+            % retention_days,
+            (cutoff,),
+        )
+        deleted = cur.rowcount
+        conn.commit()
+        # reclaim the freed pages so the file actually shrinks (doc 30: DB growth awareness)
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError:
+            pass  # VACUUM can fail under concurrent WAL writers; non-fatal
+        return deleted
+    except sqlite3.Error:
+        return 0

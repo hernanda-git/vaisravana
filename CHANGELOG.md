@@ -1,5 +1,16 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.1.1 (2026-07-26) — decisions_log 1-day auto-prune
+- **DB auto-prune (owner ask):** `decisions_log` (the most-spammed table — one row per
+  pair×strategy per 60s tick, ~65k rows/day) is now pruned of rows older than 1 day.
+  - `db.purge_old_decisions()` deletes via `datetime(ts) < datetime('now','-1 days')`
+    (column wrapped in datetime() because the stored ISO `ts` carries a `+00:00` suffix
+    that breaks a raw string compare), then VACUUMs to reclaim space.
+  - Wired at two points: on **boot** (immediate trim) and at the **UTC-midnight daily roll**
+    (with a 🧹 Telegram card reporting rows deleted). Trade/exec logs are kept — they drive
+    evaluation + promotion, so only the decision audit trail is pruned.
+- **+4 tests** (tests/test_phase21_prune.py) → 180 passing.
+
 ## v0.1.0 (2026-07-26) — ACTIVE MULTI-STRATEGY OVERHAUL
 - **Win-rate target rationalized (owner ask):** 85% gate was irrational/silent → replaced
   with an EXPECTANCY-FIRST promotion gate. WR is now a *floor* (56%, above the taker
