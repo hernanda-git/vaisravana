@@ -247,3 +247,30 @@ def purge_old_decisions(
         return deleted
     except sqlite3.Error:
         return 0
+
+
+def wipe_db(conn: sqlite3.Connection) -> int:
+    """Delete EVERY row from all telemetry tables (decisions_log, trade_logs, results_log,
+    exec_events, system_health) — a fresh start. Keeps the schema (idempotent, safe to
+    re-run). Used by the `/clean` Telegram command. Returns total rows deleted.
+
+    NOTE: this is NOT called automatically — only on explicit owner `/clean`. Trade and
+    execution logs are intentionally destroyed; the next loop iteration reloads zero open
+    positions and starts with a blank win rate.
+    """
+    total = 0
+    try:
+        for t in TABLES:
+            try:
+                cur = conn.execute(f"DELETE FROM {t}")
+                total += cur.rowcount
+            except sqlite3.Error:
+                pass
+        conn.commit()
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError:
+            pass
+    except sqlite3.Error:
+        return total
+    return total

@@ -1,5 +1,19 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.1.6 (2026-07-26) — `/clean` slash command (wipe + fresh start)
+- **Owner slash command `/clean`** (owner ask). The bot was send-only; added a
+  `TelegramCommandListener` (daemon thread, `getUpdates` poll, chat-gated to NOTIFY_CHAT_ID)
+  that dispatches `/clean`. On `/clean` the bot:
+  - wipes the entire telemetry DB (`db.wipe_db` → DELETE all rows from trade_logs /
+    decisions_log / results_log / exec_events / system_health, keeps schema),
+  - clears ALL in-memory cooldown/loss/kill state: `KillSwitch` cooldowns+streaks+tripped,
+    `realized_loss_today`, `open_trades`, `monitor.positions`, `PaperSimExchange._prices`,
+  - removes the caretaker cron state file (`.vaisravana_cron_state.json`) so it may re-tune
+    immediately,
+  - reloads zero open positions next loop → **blank win rate, true fresh start**.
+  Sends a 🧼 confirmation card. Safe: PAPER-only, owner-chat-gated, no live path touched.
+- **+6 tests** (tests/test_phase23_clean.py) → 199 passing.
+
 ## v0.1.5 (2026-07-26) — losing-side expectancy gate + WATCH spam fix
 - **Losing-side gate (owner ask: WR 26% + spam).** `TradeLifecycle.side_expectancy(side)`
   returns rolling ΣR over last-30 closed trades per side. `_decide_tick` now SUPPRESSES

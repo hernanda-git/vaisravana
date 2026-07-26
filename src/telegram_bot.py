@@ -246,3 +246,70 @@ class TelegramNotifier:
             f"<b>system_health</b>  : <code>{c.get('system_health', 0)}</code>\n"
         )
         return self.send_message(text)
+
+
+import threading  # noqa: E402  (kept local to avoid disturbing the top import block)
+
+
+class TelegramCommandListener:
+    """Polls Telegram `getUpdates` in a daemon thread and dispatches slash commands.
+
+    Owner-only control surface for the running bot (e.g. `/clean`). The bot is otherwise
+    send-only; this adds inbound command handling without a webhook. Uses the same httpx
+    client as the notifier. Offsets are tracked so each update is handled once.
+    """
+
+    def __init__(self, notifier: "TelegramNotifier",
+                 on_command: "callable[[str, str], None]",
+                 poll_s: int = 2, allowed_chat_id: "str | int | None" = None) -> None:
+        self._n = notifier
+        self._on = on_command
+        self._poll_s = poll_s
+        self._allowed = str(allowed_chat_id) if allowed_chat_id is not None else None
+        self._offset = 0
+        self._stop = threading.Event()
+        self._thread: "threading.Thread | None" = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._poll_once()
+            except Exception as e:  # never let polling kill the bot
+                log.debug("tg command poll error: %s", e)
+            self._stop.wait(self._poll_s)
+
+    def _poll_once(self) -> None:
+        client = self._n._get_client()
+        try:
+            resp = client.get(f"{self._n._base}/getUpdates",
+                              params={"offset": self._offset, "timeout": 1})
+        except Exception as e:
+            log.debug("tg getUpdates failed: %s", e)
+            return
+        if resp.status_code != 200:
+            return
+        try:
+            data = resp.json()
+        except Exception:
+            return
+        for upd in data.get("result", []):
+            self._offset = upd.get("update_id", self._offset) + 1
+            msg = upd.get("message") or upd.get("edited_message") or {}
+            chat_id = msg.get("chat", {}).get("id")
+            if self._allowed is not None and str(chat_id) != self._allowed:
+                continue  # ignore commands from other chats
+            text = (msg.get("text") or "").strip()
+            if text.startswith("/"):
+                try:
+                    self._on(text, text)
+                except Exception as e:
+                    log.exception("tg command handler error: %s", e)

@@ -1,1 +1,1 @@
-{"last_deploy_ts": 1785087376, "last_improvement": "v0.1.4: fix loss_book NameError in close handler (P1)", "consecutive_healthy": 0, "last_change_tick": 3, "excluded_pairs": []}
+{"last_deploy_ts": 1785106680, "last_improvement": "v0.1.5: losing-side expectancy gate (BUY -5.65R suppressed) + WATCH spam batched", "consecutive_healthy": 2, "last_change_tick": 5, "excluded_pairs": []}

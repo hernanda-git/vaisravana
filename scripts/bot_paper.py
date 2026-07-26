@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import marketdata, config, decision, lifecycle, safety, telemetry, db, version as vmod
 from telegram_bot import TelegramNotifier
+from telegram_bot import TelegramCommandListener  # noqa: E402
 from sentinel import Sentinel
 from evaluation import evaluate
 from llm_research import LLMResearcher, NarrativeResearcher, ZenClient
@@ -67,6 +68,9 @@ FETCH_LIMIT = int(os.getenv("VAISRAVANA_KLINES", "600"))
 CYCLE_S = int(os.getenv("VAISRAVANA_CYCLE_S", "60"))  # 60s = one decision per minute
 DB_PATH = os.getenv("VAISRAVANA_DB", "/data/vaisravana.db")
 SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", "/data/surface.json")
+# v0.1.6: caretaker cron state file (deploy cooldown + excluded pairs). `/clean` removes
+# it so the caretaker may re-tune immediately after a fresh start.
+CRON_STATE_PATH = Path(__file__).resolve().parent.parent / ".vaisravana_cron_state.json"
 # Phase 12: time-sensitive cadence.
 #   DECISION_TF = the bar we DECIDE + ACT on every cycle (default 1m = jump immediately).
 #   TFS          = structural contexts (default 5m,15m) that feed htf_bias / mtf_aligned,
@@ -346,6 +350,54 @@ def run() -> None:
     # v0.1.0: the unique decision timeframes actually used by active strategies, so we
     # fetch each only once per pair per cycle (scalp=1m, day=15m, swing=1h default).
     decision_tfs = sorted({p.decision_tf for p in ACTIVE_PROFILES}, key=_tf_minutes)
+
+    # v0.1.6 /owner: `/clean` slash command — wipe DB + clear ALL cooldown/loss/kill state
+    # and start the trading loop fresh (blank win rate, no open positions). Defined as a
+    # closure so it captures every live state holder. Owner-only (chat-gated in the listener).
+    def clean_state() -> int:
+        deleted = db.wipe_db(conn)
+        # clear in-memory state so the next loop iteration is a true fresh start
+        open_trades.clear()
+        monitor.positions.clear()
+        if hasattr(exchange, "_prices"):
+            exchange._prices.clear()
+        kill._cooldowns.clear()
+        kill._streaks.clear()
+        kill.reset()
+        realized_loss_today["usd"] = 0.0
+        realized_loss_today["day"] = time.strftime("%Y-%m-%d")
+        reset = getattr(decider, "reset", None)
+        if callable(reset):
+            try:
+                reset()
+            except Exception:
+                pass
+        # clear the caretaker cron deploy-cooldown so it may re-tune immediately
+        try:
+            CRON_STATE_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            stats = db_stats(conn, DB_PATH)
+            notifier.send_message(
+                f"🧼 <b>Vessavaṇa — DB dibersihkan & restart fresh</b>\n"
+                f"Baris dihapus: <code>{deleted}</code>\n"
+                f"Win rate: <code>reset (0 trade)</code>\n"
+                f"Cooldown/kill-switch/loss di-clear.\n"
+                f"Mulai fresh — posisi terbuka: <code>0</code>.")
+        except Exception as e:
+            log.debug("clean confirmation card failed: %s", e)
+        log.info("owner /clean: wiped %d rows; all cooldown/loss/kill state cleared", deleted)
+        return deleted
+
+    # start the Telegram command listener (polls getUpdates in a daemon thread)
+    _cmd_listener = TelegramCommandListener(
+        notifier, lambda text, _: clean_state() if text.split()[0].split("@")[0].lower() == "/clean" else None,
+        poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID", ""),
+    )
+    _cmd_listener.start()
+    log.info("Telegram /clean listener started")
+
     while True:
         try:
             # roll daily-loss window at UTC midnight
