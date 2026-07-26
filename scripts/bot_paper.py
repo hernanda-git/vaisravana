@@ -198,11 +198,14 @@ def run() -> None:
         chat_id=os.getenv("NOTIFY_CHAT_ID", ""),
     )
     open_trades: dict[tuple, object] = lc.get_open_positions()
-    log.info("Vaiśravaṇa PAPER bot up: %d pairs x %d tfs, %d open positions reloaded "
-             "(LLM=%s)", len(PAIRS), len(TFS), len(open_trades), LLM_MODE)
+    log.info("Vaiśravaṇa PAPER bot up: %d pairs · decide=%s · ctx=%s · %d open positions reloaded "
+             "(LLM=%s)", len(PAIRS), DECISION_TF, ",".join(TFS), len(open_trades), LLM_MODE)
     notifier.notify_status(
         "Vaiśravaṇa PAPER bot started",
-        f"pairs: {', '.join(PAIRS)}\ntfs: {', '.join(TFS)}\n"
+        f"pairs: {', '.join(PAIRS)}\n"
+        f"decide every: {DECISION_TF} (jump immediately on close)\n"
+        f"context tfs: {', '.join(TFS)} (MTF bias/alignment)\n"
+        f"cycle: {CYCLE_S}s\n"
         f"mode: PAPER (no live orders)\nLLM research: {LLM_MODE}\n"
         f"open positions reloaded: {len(open_trades)}",
     )
