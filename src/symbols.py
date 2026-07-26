@@ -29,6 +29,8 @@ class SymbolInfo:
     quote: str = "USDT"
     price_precision: int = 2
     qty_precision: int = 0
+    tick_size: float = 0.01     # price granularity (exchangeInfo PRICE_FILTER)
+    step_size: float = 1.0      # qty granularity (exchangeInfo LOT_SIZE); 1.0 = integer lots
     min_notional: float = 5.0
     min_qty: float = 0.0
     is_1000x: bool = False

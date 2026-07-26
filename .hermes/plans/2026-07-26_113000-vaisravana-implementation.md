@@ -127,7 +127,7 @@ and side-effect free.
 
 ---
 
-## Phase 4 — Execution & Position Monitor (the footguns)
+## Phase 4 — Execution & Position Monitor (the footguns)  ✅ DONE (2026-07-26)
 
 **Objective:** Send orders safely, validate/repair, and run the background position monitor.
 Implements `doc 30` §3 (validate→repair→resubmit-once), `doc 32` Lessons 2-5.
