@@ -190,8 +190,12 @@ def _cycle(pair, tf, conn, surface, lc, tel, kill, decider, notifier, open_trade
     rec = decider.process(state, liquidity_ok=True, intraday_loss_pct=0.0,
                           sl_price=sl, entry_price=entry, leverage=surface.max_leverage)
     reason = "; ".join(rec.gate.reasons) if rec.gate else "two-layer gate"
-    notifier.notify_decision(pair, tf, rec.decision, rec.scoring.chosen_score,
-                             rec.side or "-", reason)
+    # Throttle: SKIP/WATCH are written to decisions_log (full audit) but NOT pushed
+    # to Telegram — only real events (ENTRY/fill, close, promotion, kill-switch)
+    # reach the user's DM, so it mirrors the listener's "alert on action" style.
+    if rec.actionable:
+        notifier.notify_decision(pair, tf, rec.decision, rec.scoring.chosen_score,
+                                 rec.side or "-", reason)
     if not rec.actionable:
         return
     trade = lc.open(correlation_id=rec.correlation_id, pair=pair, tf=tf,
