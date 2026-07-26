@@ -1,5 +1,18 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.1.5 (2026-07-26) — losing-side expectancy gate + WATCH spam fix
+- **Losing-side gate (owner ask: WR 26% + spam).** `TradeLifecycle.side_expectancy(side)`
+  returns rolling ΣR over last-30 closed trades per side. `_decide_tick` now SUPPRESSES
+  ENTRY on a side whose recent expectancy is negative (≥20 samples, floor −0.05R). The
+  live data showed BUY at 16% WR / −14R while SELL was +1.97R — this stops the bleed
+  without an irrational 85% gate. Re-evaluated every tick, so it unblocks when the side
+  recovers. Tunable: `VAISRAVANA_SIDE_MIN_SAMPLES` (def 20), `VAISRAVANA_SIDE_EXP_FLOOR` (def −0.05).
+- **WATCH spam fixed.** Previously every pair×strategy emitted its own WATCH card
+  (~45/min). Now WATCH/SUPPRESS decisions are batched into ONE per-cycle card, and only
+  near-threshold rows (within 0.06 of the entry bar) are kept. ENTRY/FILL/CLOSE/PR cards
+  are unchanged (they're meaningful).
+- **+4 tests** (tests/test_phase22_sidegate.py) → 193 passing.
+
 ## v0.1.4 (2026-07-26) — fix loss_book NameError in close handler
 - **BUG FIX:** `loss_book → realized_loss_today` in `run()` close handler (line 401-402).
   The close handler referenced `loss_book` which was only a parameter name in `_decide_tick`,

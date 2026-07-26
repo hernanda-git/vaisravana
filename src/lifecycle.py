@@ -183,3 +183,25 @@ class TradeLifecycle:
             (win_pct, loss_pct, trade.trade_id),
         )
         return win_pct, loss_pct
+
+    def side_expectancy(self, side: str, n: int = 30) -> tuple[int, float]:
+        """Rolling expectancy (Σ r_multiple) over the LAST `n` closed trades for `side`.
+
+        Used by the entry gate to suppress a side that is systematically bleeding
+        (e.g. BUY at -14R while SELL is positive). Returns (count, expectancy_r).
+        A side with < 2 samples is reported as (0, 0.0) so the gate never blindly
+        blocks an unproven side.
+        """
+        try:
+            rows = self.conn.execute(
+                """SELECT r_multiple FROM trade_logs
+                   WHERE side=? AND ts_closed IS NOT NULL
+                   ORDER BY ts_closed DESC LIMIT ?""",
+                (side, n),
+            ).fetchall()
+        except sqlite3.Error:
+            return 0, 0.0
+        vals = [r["r_multiple"] for r in rows if r["r_multiple"] is not None]
+        if len(vals) < 2:
+            return len(vals), 0.0
+        return len(vals), round(sum(vals), 3)

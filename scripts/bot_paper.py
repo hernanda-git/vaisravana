@@ -368,6 +368,7 @@ def run() -> None:
                 for tf in decision_tfs + TFS:
                     feed.mark(pair, tf, int(time.time() * 1000))
             feed_frozen = bool(feed.frozen_list(PAIRS, decision_tfs + TFS))
+            cycle_decisions: list = []  # v0.1.6: batch WATCH/SUPPRESS cards into 1/cycle
             for pair in PAIRS:
                 # v0.1.0: fetch all decision TFs + structural contexts ONCE per pair,
                 # cache them, and hand the cache to _decide_tick so each strategy reads
@@ -385,7 +386,7 @@ def run() -> None:
                              daily_loss_pct=daily_loss_pct, feed_frozen=feed_frozen,
                              equity=equity, loss_book=realized_loss_today,
                              monitor=monitor, exchange=exchange, guard=guard,
-                             klines_cache=klines_cache)
+                             klines_cache=klines_cache, decision_sink=cycle_decisions)
                 # push the latest price into the sim exchange so the monitor's
                 # mark-price SL/TP/orphan/maxhold logic is real (doc 30 §3, doc 32 L4)
                 _last_decs = klines_cache.get(DECISION_TF) or []
@@ -404,6 +405,17 @@ def run() -> None:
                                side=ev.side, price=ev.price, status=ev.reason)
                 notifier.notify_close(ev.symbol, DECISION_TF, ev.side, ev.price,
                                       ev.reason, res["r_multiple"], bool(res["win"]))
+            # v0.1.6: flush the batched WATCH/SUPPRESS decision card (1 per cycle, not 45).
+            if cycle_decisions:
+                lines = []
+                for (p, tf, strat, side, score, thr) in cycle_decisions[:25]:
+                    tag = f"score {score}≥{thr}" if thr != "SUPPRESSED" else "SUPPRESSED"
+                    lines.append(f"• <code>{p} {tf}</code> {side} [{strat}] {tag}")
+                more = "" if len(cycle_decisions) <= 25 else \
+                    f"\n… +{len(cycle_decisions) - 25} more"
+                notifier.send_message(
+                    f"👁 <b>Decisions</b> ({len(cycle_decisions)} near-threshold/"
+                    f"suppressed)\n" + "\n".join(lines) + more)
             # periodic status every ~30 min
             if time.time() - last_status > 1800:
                 _report_status(conn, notifier)
@@ -541,13 +553,22 @@ def research_loop(notifier: TelegramNotifier, db_path: str = DB_PATH) -> None:
 def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_trades,
                 registry=None, daily_loss_pct=0.0, feed_frozen=False, equity=1000.0,
                 loss_book=None, monitor=None, exchange=None, guard=None,
-                klines_cache=None):
+                klines_cache=None, decision_sink=None):
     """Phase 12 — time-sensitive decision tick.
 
     Fetches the 1m (DECISION_TF) series + each structural context TF, builds an MTF
     MarketState on the latest closed 1m bar, decides, and (if actionable + MTF-aligned +
     spread tight) opens a PAPER position at that close — i.e. jumps immediately.
+
+    `decision_sink` (optional list): when provided, WATCH/near-threshold decisions are
+    appended for a single batched per-cycle card instead of one Telegram message per
+    pair×strategy per tick (prevents the WATCH spam).
     """
+    # v0.1.6: suppress ENTRY on a side that is systematically bleeding. BUY was running
+    # at ~16% WR / -14R while SELL was positive — so we block the losing side until its
+    # recent expectancy recovers. This is expectancy-driven, not an arbitrary 85% gate.
+    SIDE_EXP_MIN_SAMPLES = int(os.getenv("VAISRAVANA_SIDE_MIN_SAMPLES", "20"))
+    SIDE_EXP_FLOOR_R = float(os.getenv("VAISRAVANA_SIDE_EXP_FLOOR", "-0.05"))
     cache = klines_cache or {}
     for profile in ACTIVE_PROFILES:
         dtf = profile.decision_tf
@@ -606,8 +627,30 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                                atr=(dec[i].c * state.atr_pct), surface=surface)
         if se.decision != "ENTRY":
             if se.decision == "WATCH":
-                notifier.notify_decision(pair, dtf, "WATCH", se.chosen_score,
-                                         se.side, f"{profile.name} below threshold")
+                # v0.1.6: batch WATCHs into ONE per-cycle card (no spam). Only keep
+                # near-threshold rows (within 0.06 of the bar) — they're the informative ones.
+                if decision_sink is not None and se.chosen_score >= profile.entry_threshold - 0.06:
+                    decision_sink.append(
+                        (pair, dtf, profile.name, se.side, round(se.chosen_score, 3),
+                         round(profile.entry_threshold, 3)))
+                elif decision_sink is None:
+                    notifier.notify_decision(pair, dtf, "WATCH", se.chosen_score,
+                                             se.side, f"{profile.name} below threshold")
+            continue
+
+        # v0.1.6: side-bleed gate — block ENTRY on a side whose recent expectancy is
+        # negative (enough samples). BUY was -14R; this stops the bleed without an
+        # irrational WR gate. Re-evaluated every tick, so it unblocks when the side recovers.
+        sc, sexp = lc.side_expectancy(se.side)
+        if sc >= SIDE_EXP_MIN_SAMPLES and sexp < SIDE_EXP_FLOOR_R:
+            reason = (f"{se.side} bleeding: exp {sexp:+.2f}R over {sc} trades "
+                      f"(<{SIDE_EXP_FLOOR_R:+.2f}R floor) — side suppressed")
+            if decision_sink is not None:
+                decision_sink.append((pair, dtf, profile.name, se.side,
+                                      round(se.chosen_score, 3), "SUPPRESSED"))
+            else:
+                notifier.notify_decision(pair, dtf, "SKIP", se.chosen_score,
+                                         se.side, reason)
             continue
 
         corr_id = f"{pair}-{dtf}-{int(time.time()*1000)}-{se.side}"
