@@ -358,7 +358,7 @@ def run() -> None:
                 # cache them, and hand the cache to _decide_tick so each strategy reads
                 # its own decision_tf without re-fetching.
                 klines_cache: dict[str, list] = {}
-                need = list(DECISION_TFS) + list(TFS)
+                need = list(decision_tfs) + list(TFS)
                 for tf in need:
                     try:
                         cs = fetch_klines(pair, tf, FETCH_LIMIT)
