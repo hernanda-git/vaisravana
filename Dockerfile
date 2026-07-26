@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY src/ src/
 COPY scripts/ scripts/
+COPY VERSION ./
+COPY CHANGELOG.md ./
 COPY pyproject.toml ./
 
 RUN pip install --no-cache-dir pydantic httpx
