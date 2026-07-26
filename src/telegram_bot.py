@@ -37,6 +37,7 @@ class TelegramNotifier:
         self.chat_id = chat_id
         self._base = f"https://api.telegram.org/bot{bot_token}"
         self._client: httpx.Client | None = None
+        self._chat_dead: bool = False   # sticky: permanent chat error (e.g. not a member)
 
     def _get_client(self) -> httpx.Client:
         if self._client is None:
@@ -44,6 +45,8 @@ class TelegramNotifier:
         return self._client
 
     def send_message(self, text: str) -> bool:
+        if self._chat_dead:
+            return False
         MAX_LEN = 3950
         if len(text) > MAX_LEN:
             trunc = f"\n\n_... truncated ({len(text) - MAX_LEN} chars omitted)_"
@@ -60,6 +63,15 @@ class TelegramNotifier:
         })
         if resp.status_code == 200:
             return True
+        # Permanent, non-retryable chat errors (bot not a member / kicked / forbidden):
+        # stop hammering — surface once and go quiet until the next deploy.
+        if any(k in resp.text for k in ("chat not found", "bot was kicked",
+                                         "bot is not a member", "Forbidden", "PEER_ID")):
+            self._chat_dead = True
+            log.error("Telegram chat %s unreachable (%s) — notifications disabled "
+                      "until restart. Add the bot to the chat or fix NOTIFY_CHAT_ID.",
+                      self.chat_id, resp.text[:80])
+            return False
         if "parse entities" in resp.text:
             resp2 = client.post(f"{self._base}/sendMessage", json={
                 "chat_id": self.chat_id,
