@@ -145,6 +145,27 @@ class TradeLifecycle:
             "close_reason": close_reason,
         }
 
+    def get_open_positions(self) -> dict:
+        """Reload open (pair,tf,side) → OpenTrade from the DB.
+
+        Restart-safe: after a deploy/machine restart the in-memory map is empty,
+        but the persisted rows (ts_closed IS NULL) are still there. The bot calls
+        this at boot so positions are never orphaned.
+        """
+        out: dict[tuple, OpenTrade] = {}
+        for r in self.conn.execute(
+            """SELECT trade_id, correlation_id, pair, tf, side, entry_price, size,
+                      leverage, sl_price, tp_price
+               FROM trade_logs WHERE ts_closed IS NULL"""
+        ):
+            out[(r["pair"], r["tf"], r["side"])] = OpenTrade(
+                trade_id=r["trade_id"], correlation_id=r["correlation_id"],
+                pair=r["pair"], tf=r["tf"], side=r["side"],
+                entry_price=r["entry_price"], size=r["size"], leverage=r["leverage"],
+                sl_price=r["sl_price"], tp_price=r["tp_price"],
+            )
+        return out
+
     def _update_rolling(self, trade: OpenTrade) -> tuple[float, float]:
         """Rolling win_pct/loss_pct per (pair, tf, side) over ALL closed trades so far
         (rolling-200 windowing is the Evaluation Engine's job, doc 30 §5)."""

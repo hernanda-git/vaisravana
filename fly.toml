@@ -1,0 +1,33 @@
+# Project Vaiśravaṇa — Fly.io deploy (PAPER bot + Telegram reporting)
+# Mirrors learnernoearner-listener's deploy shape (sin region, /data volume).
+
+app = 'vaisravana'
+primary_region = 'sin'
+
+[build]
+
+[env]
+  VAISRAVANA_PAIRS = 'BTCUSDT,ETHUSDT,SOLUSDT'
+  VAISRAVANA_TFS = '5m,15m'
+  VAISRAVANA_KLINES = '600'
+  VAISRAVANA_CYCLE_S = '30'
+  VAISRAVANA_DB = '/data/vaisravana.db'
+  PYTHONUNBUFFERED = '1'
+
+[[mounts]]
+  source = 'data_volume'
+  destination = '/data'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = false
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256
