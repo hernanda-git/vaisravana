@@ -18,6 +18,7 @@ from lifecycle import TradeLifecycle  # noqa: E402
 from orchestrator import PaperOrchestrator  # noqa: E402
 from safety import (  # noqa: E402
     KillSwitch,
+    health_clean,
     promotion_gate,
     should_demote,
 )
@@ -71,6 +72,54 @@ def test_win_resets_streak():
     for _ in range(4):
         ks.record_close("BTCUSDT", "5m", "BUY", win=False)
     assert not ks.in_cooldown("BTCUSDT", "5m", "BUY")
+
+
+# --- health_clean (doc 30 §6) ---
+
+def test_health_clean_empty_table(conn):
+    """Empty system_health is healthy."""
+    assert health_clean(conn) is True
+
+
+def test_health_clean_all_pass(conn):
+    """Only PASS rows → healthy."""
+    conn.execute('INSERT INTO system_health (ts, "check", status) VALUES (?,?,?)',
+                 ("2026-01-01T00:00:00Z", "heartbeat", "PASS"))
+    conn.execute('INSERT INTO system_health (ts, "check", status) VALUES (?,?,?)',
+                 ("2026-01-01T00:01:00Z", "heartbeat", "PASS"))
+    conn.commit()
+    assert health_clean(conn) is True
+
+
+def test_health_clean_any_fail_in_window(conn):
+    """FAIL rows within the window → unhealthy."""
+    conn.execute('INSERT INTO system_health (ts, "check", status) VALUES (?,?,?)',
+                 ("2026-01-01T00:00:00Z", "kill_switch", "FAIL"))
+    conn.commit()
+    assert health_clean(conn, window_rows=100) is False
+
+
+def test_health_clean_fail_outside_window(conn):
+    """FAIL rows older than the window are ignored."""
+    conn.execute('INSERT INTO system_health (ts, "check", status) VALUES (?,?,?)',
+                 ("2026-01-01T00:00:00Z", "kill_switch", "FAIL"))
+    conn.execute('INSERT INTO system_health (ts, "check", status) VALUES (?,?,?)',
+                 ("2026-01-01T00:01:00Z", "heartbeat", "PASS"))
+    conn.execute('INSERT INTO system_health (ts, "check", status) VALUES (?,?,?)',
+                 ("2026-01-01T00:02:00Z", "heartbeat", "PASS"))
+    conn.commit()
+    # window of 2 means only the 2 PASS rows are checked → healthy
+    assert health_clean(conn, window_rows=2) is True
+
+
+def test_health_clean_mixed_with_fail(conn):
+    """FAIL rows within the window → unhealthy even with PASS rows."""
+    conn.execute('INSERT INTO system_health (ts, "check", status) VALUES (?,?,?)',
+                 ("2026-01-01T00:00:00Z", "heartbeat", "PASS"))
+    conn.execute('INSERT INTO system_health (ts, "check", status) VALUES (?,?,?)',
+                 ("2026-01-01T00:01:00Z", "kill_switch", "FAIL"))
+    conn.commit()
+    assert health_clean(conn, window_rows=100) is False
 
 
 # --- promotion gate integration (plan Phase 8 item 5) ---
