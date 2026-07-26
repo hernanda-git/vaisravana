@@ -231,7 +231,14 @@ and all kill-switches (`doc 25`, `doc 30` §7).
 
 ---
 
-## Phase 9 — Paper-First Validation & Backtest Harness
+## Phase 9 — Paper-First Validation & Backtest Harness  🟡 HARNESS DONE (2026-07-26)
+
+> Status: harness + OOS split + VIP0 fee model + report generator implemented and
+> tested (5 tests). Synthetic-data demo (`scripts/run_backtest_demo.py`) exercises the
+> full pipeline E2E (1 entry/4000 noisy candles — the 0.90 threshold is correctly
+> selective). **Remaining:** real-data runs on ≥30 liquid pairs require Binance
+> historical klines (network + API) — deliberately NOT simulated to avoid fabricating
+> validation results.
 
 **Objective:** Prove the system meets goals in PAPER before any live. Addresses `doc 28`
 group E (research validity) and `doc 31` open questions (backtest, fee tiers).
