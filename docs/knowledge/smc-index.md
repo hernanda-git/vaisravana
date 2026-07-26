@@ -22,6 +22,7 @@ quick-reference without wading through the spec.
 | 4 | [`smc-wiring.md`](smc-wiring.md) | dev/ops | Where it plugs in + Sentinel constraint + guardrails. |
 | 5 | [`smc-verification.md`](smc-verification.md) | quant/QA | E2E plan: pytest + real-data backtest + acceptance gates. |
 | 6 | [`smc-quickref.md`](smc-quickref.md) | ops | Cheat sheet + the knobs the Sentinel *can* tune. |
+| 7 | [`smc-execution-plan.md`](smc-execution-plan.md) | dev/lead | Phase-by-phase build + rollout, shadow-first, reversible. |
 
 ## Alignment facts (verified against the code, not assumed)
 
