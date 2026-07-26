@@ -101,6 +101,40 @@ def state_factory(pair: str, tf: str):
     return factory
 
 
+def state_factory_mtf(pair: str, tf: str, contexts: dict[str, list[Candle]]):
+    """Phase 12 — 1m (DECISION_TF) decision state with MTF context (5m/15m bias)."""
+    single = state_factory(pair, tf)
+
+    def factory(candles: list[Candle], i: int) -> MarketState:
+        st = single(candles, i)
+        # higher-TF bias from the largest available context
+        htf_tf = max(contexts.keys(), key=lambda t: _tf_minutes(t)) if contexts else tf
+        htf = contexts.get(htf_tf) or candles
+        hc = [c.c for c in htf[-50:]]
+        ema20 = _ema(hc[-20:], 20); ema50 = _ema(hc, 50)
+        htf_bull = ema20 > ema50 * 1.0005; htf_bear = ema20 < ema50 * 0.9995
+        htf_bias = "bullish" if htf_bull else ("bearish" if htf_bear else "neutral")
+        dc = [c.c for c in candles[max(0, i - 50): i + 1]]
+        dbull = _ema(dc[-20:], 20) > _ema(dc, 50) * 1.0005
+        dbear = _ema(dc[-20:], 20) < _ema(dc, 50) * 0.9995
+        mtf_aligned = (dbull and htf_bull) or (dbear and htf_bear) or htf_bias == "neutral"
+        return MarketState(
+            symbol=pair, tf=tf, regime=st.regime, htf_bias=htf_bias,
+            body_ratio=st.body_ratio, vol_z=st.vol_z, delta_z=st.delta_z,
+            bos=st.bos, hh=st.hh, hl=st.hl, lh=st.lh, ll=st.ll, choch=st.choch,
+            liq_sweep=st.liq_sweep, eq_low=st.eq_low, eq_high=st.eq_high, fvg=st.fvg,
+            atr_pct=st.atr_pct, spread_bps=1.0, funding_ok=True, adl_rank=1,
+            mtf_aligned=mtf_aligned, last_close=st.last_close,
+        )
+    return factory
+
+
+def _tf_minutes(tf: str) -> int:
+    unit = tf[-1].lower()
+    mult = int(tf[:-1]) if tf[:-1].isdigit() else 1
+    return mult * {"m": 1, "h": 60, "d": 1440}.get(unit, 1)
+
+
 def run_series(pair: str, tf: str, candles: list[Candle], tag: str):
     conn = init_db(ROOT / "reports" / f"real_{pair}_{tf}_{tag}.db")
     h = BacktestHarness(conn, state_factory(pair, tf))
@@ -116,15 +150,32 @@ def main() -> None:
 
     pairs_tfs = [(p, tf) for p in ("BTCUSDT", "ETHUSDT", "SOLUSDT") for tf in ("5m", "15m")]
     full_stats, ins_stats, oos_stats = [], [], []
+    DEC_TF = "1m"          # Phase 12: decide every minute
+    CTX_TFS = ["5m", "15m"]
     for pair, tf in pairs_tfs:
         candles = load(pair, tf)
         ins, oos = split(candles, oos_frac=0.3)
-        full_stats.append(run_series(pair, tf, candles, "full"))
-        ins_stats.append(run_series(pair, tf, ins, "ins"))
-        oos_stats.append(run_series(pair, tf, oos, "oos"))
-        st = full_stats[-1]
-        print(f"{pair} {tf}: {st.candles} bars, entries={st.entries} "
-              f"TP={st.tp_exits} SL={st.sl_exits} MH={st.maxhold_exits}")
+        # Phase 12: backtest the 1m decision cadence with MTF context from 5m/15m.
+        ctx = {c: load(pair, c) for c in CTX_TFS}
+        factory = state_factory_mtf(pair, DEC_TF, ctx)
+        # run the 1m decision series over the SAME real history length (replay 1m bars)
+        try:
+            dec_candles = load(pair, DEC_TF)
+        except FileNotFoundError:
+            print(f"SKIP {pair} {DEC_TF}: no {DEC_TF} klines fetched yet "
+                  f"(run scripts/fetch_klines_via_gateway.py with 1m).")
+            continue
+        for tag, series in (("full", dec_candles), ("ins", dec_candles[:int(len(dec_candles)*0.7)]),
+                            ("oos", dec_candles[int(len(dec_candles)*0.7):])):
+            conn = init_db(ROOT / "reports" / f"real_{pair}_{DEC_TF}_{tag}.db")
+            h = BacktestHarness(conn, factory)
+            st = h.run(pair, DEC_TF, series)
+            conn.close()
+            if tag == "full": full_stats.append(st)
+            elif tag == "ins": ins_stats.append(st)
+            else: oos_stats.append(st)
+            print(f"{pair} {DEC_TF} {tag}: {st.candles} bars, entries={st.entries} "
+                  f"TP={st.tp_exits} SL={st.sl_exits} MH={st.maxhold_exits}")
 
     md = ["# Phase 9 — Real-Data Backtest (Binance USDⓈ-M via binance-gateway/sin)",
           "",

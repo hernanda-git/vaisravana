@@ -47,9 +47,15 @@ PAIRS = os.getenv("VAISRAVANA_PAIRS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
 FETCH_URL = "https://fapi.binance.com/fapi/v1/klines?symbol={s}&interval={t}&limit={n}"
 FETCH_LIMIT = int(os.getenv("VAISRAVANA_KLINES", "600"))
-CYCLE_S = int(os.getenv("VAISRAVANA_CYCLE_S", "30"))
+CYCLE_S = int(os.getenv("VAISRAVANA_CYCLE_S", "60"))  # 60s = one decision per minute
 DB_PATH = os.getenv("VAISRAVANA_DB", "/data/vaisravana.db")
 SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", "/data/surface.json")
+# Phase 12: time-sensitive cadence.
+#   DECISION_TF = the bar we DECIDE + ACT on every cycle (default 1m = jump immediately).
+#   TFS          = structural contexts (default 5m,15m) that feed htf_bias / mtf_aligned,
+#                  making the existing 7-factor engine multi-timeframe WITHOUT engine edits.
+DECISION_TF = os.getenv("VAISRAVANA_DECISION_TF", "1m")
+TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
 # Phase 11 opt-in: off | research | research+context. Default OFF (deterministic).
 LLM_MODE = os.getenv("VAISRAVANA_LLM", "off")
 # LLM transport (OpenAI-compatible chat/completions). Defaults to OpenCode Zen gateway.
@@ -122,6 +128,55 @@ def build_state(pair: str, tf: str, candles: list[Candle], i: int) -> MarketStat
         vol_z=(vols[-1] - mu) / sd, delta_z=(signed[-1] - smu) / ssd,
         atr=atr, atr_pct=atr_pct, spread_bps=1.0, adl_rank=1,
     )
+
+
+def _ema_cross(closes: list[float]) -> tuple[bool, bool]:
+    """Return (bull, bear) from EMA20 vs EMA50 on the given closes (higher-TF bias)."""
+    if len(closes) < 50:
+        return False, False
+    ema20 = _ema(closes[-20:], 20)
+    ema50 = _ema(closes, 50)
+    return ema20 > ema50 * 1.0005, ema20 < ema50 * 0.9995
+
+
+def build_state_mtf(pair: str, dec_candles: list[Candle], i: int,
+                     contexts: dict[str, list[Candle]]) -> MarketState:
+    """Phase 12 — time-sensitive decision state.
+
+    The 1m (DECISION_TF) bar drives the decision + act price. Structural TFs
+    (contexts: {tf: candles}) set `htf_bias` (15m EMA cross) and `mtf_aligned`
+    (1m EMA direction agrees with the higher-TF bias). This makes the EXISTING
+    7-factor engine multi-timeframe without any engine edit — the engines read
+    htf_bias/mtf_aligned already.
+
+    Acting on the latest closed 1m bar's close = "jump immediately" in PAPER.
+    """
+    st = build_state(pair, DECISION_TF, dec_candles, i)
+    bar = dec_candles[i]
+    # 1m direction (for alignment)
+    dec_bull, dec_bear = _ema_cross([c.c for c in dec_candles[max(0, i - 50): i + 1]])
+    # pick the highest structural TF available for htf_bias (default 15m if present)
+    htf_tf = max(contexts.keys(), key=lambda t: _tf_minutes(t)) if contexts else DECISION_TF
+    htf = contexts.get(htf_tf) or dec_candles
+    htf_bull, htf_bear = _ema_cross([c.c for c in htf[-50:]])
+    htf_bias = "bullish" if htf_bull else ("bearish" if htf_bear else "neutral")
+    # aligned = 1m direction agrees with the HTF bias (don't fight the trend)
+    mtf_aligned = ((dec_bull and htf_bull) or (dec_bear and htf_bear)
+                   or htf_bias == "neutral")
+    return MarketState(
+        symbol=pair, tf=DECISION_TF, regime=st.regime,
+        htf_bias=htf_bias, last_close=bar.c,
+        body_ratio=st.body_ratio, vol_z=st.vol_z, delta_z=st.delta_z,
+        atr=st.atr, atr_pct=st.atr_pct, spread_bps=st.spread_bps,
+        adl_rank=1, mtf_aligned=mtf_aligned,
+    )
+
+
+def _tf_minutes(tf: str) -> int:
+    """Parse a timeframe label to minutes (1m->1, 5m->5, 15m->15, 1h->60, ...)."""
+    unit = tf[-1].lower()
+    mult = int(tf[:-1]) if tf[:-1].isdigit() else 1
+    return mult * {"m": 1, "h": 60, "d": 1440}.get(unit, 1)
 
 
 def reload_open_trades(conn: sqlite3.Connection, lc: TradeLifecycle) -> dict:
@@ -330,61 +385,75 @@ def _shadow_comparison(conn, baseline_surface, candidate_surface):
     class _C:
         baseline = baseline
         shadow = shadow
+
         @property
         def shadow_not_worse(self):
             return (self.shadow.expectancy_r >= self.baseline.expectancy_r
                     and self.shadow.max_dd_pct <= self.baseline.max_dd_pct)
+
         @property
         def health_improved(self):
             return self.shadow.health() > self.baseline.health()
+
         @property
         def promotable(self):
             return self.shadow_not_worse and self.health_improved
     return _C()
 
 
-def _cycle(pair, tf, conn, surface, lc, tel, kill, decider, notifier, open_trades):
-    candles = fetch_klines(pair, tf, FETCH_LIMIT)
-    if len(candles) < 60:
-        return
-    i = len(candles) - 1
-    bar = candles[i]
-    state = build_state(pair, tf, candles, i)
-    atr = state.atr or bar.c * state.atr_pct
-    entry = bar.c
+def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_trades):
+    """Phase 12 — time-sensitive decision tick.
 
-    key = None  # set if a position is open
-    # 1. manage existing position for this (pair,tf): check TP/SL on last bar
+    Fetches the 1m (DECISION_TF) series + each structural context TF, builds an MTF
+    MarketState on the latest closed 1m bar, decides, and (if actionable + MTF-aligned +
+    spread tight) opens a PAPER position at that close — i.e. jumps immediately.
+    """
+    dec = fetch_klines(pair, DECISION_TF, FETCH_LIMIT)
+    if len(dec) < 60:
+        return
+    contexts = {}
+    for tf in TFS:
+        if tf == DECISION_TF:
+            continue
+        c = fetch_klines(pair, tf, FETCH_LIMIT)
+        if len(c) >= 50:
+            contexts[tf] = c
+    i = len(dec) - 1
+    state = build_state_mtf(pair, dec, i, contexts)
+
+    # manage an existing position on this pair (any structural tf) by its 1m print
+    key = None
     for k in list(open_trades.keys()):
-        if k[0] == pair and k[1] == tf:
+        if k[0] == pair:
             t = open_trades[k]
+            bar = dec[i]
             hit_tp = (t.side == "BUY" and bar.h >= t.tp_price) or \
                      (t.side == "SELL" and bar.l <= t.tp_price)
             hit_sl = (t.side == "BUY" and bar.l <= t.sl_price) or \
                      (t.side == "SELL" and bar.h >= t.sl_price)
             if hit_tp:
-                _close(pair, tf, k[2], t.tp_price, "TP", conn, lc, tel, kill,
+                _close(pair, k[1], k[2], t.tp_price, "TP", conn, lc, tel, kill,
                        notifier, open_trades)
             elif hit_sl:
-                _close(pair, tf, k[2], t.sl_price, "SL", conn, lc, tel, kill,
+                _close(pair, k[1], k[2], t.sl_price, "SL", conn, lc, tel, kill,
                        notifier, open_trades)
             else:
                 key = k
             break
-
     if key is not None:
-        return  # one open position per (pair,tf,side); wait for it to close
+        return  # one open position per pair; wait for it to close
 
-    # 2. kill-switch gate
-    tripped, reason = kill.check_global(daily_loss_pct=0.0, adl_rank=1,
-                                        feed_frozen=False)
+    # kill-switch gate
+    tripped, reason = kill.check_global(daily_loss_pct=0.0, adl_rank=1, feed_frozen=False)
     if tripped:
         tel.health("kill_switch", "FAIL", detail=reason)
         notifier.notify_kill_switch(reason)
         return
 
-    # 3. decide + open (PAPER)
+    # decide + open (PAPER) on the latest closed 1m bar
     prelim = decide(state, surface)
+    atr = state.atr or dec[i].c * state.atr_pct
+    entry = dec[i].c
     sl = (entry + surface.sl_atr_mult * atr) if prelim.side == "SELL" else \
          (entry - surface.sl_atr_mult * atr)
     tp = (entry - surface.tp_atr_mult * atr) if prelim.side == "SELL" else \
@@ -392,23 +461,29 @@ def _cycle(pair, tf, conn, surface, lc, tel, kill, decider, notifier, open_trade
     rec = decider.process(state, liquidity_ok=True, intraday_loss_pct=0.0,
                           sl_price=sl, entry_price=entry, leverage=surface.max_leverage)
     reason = "; ".join(rec.gate.reasons) if rec.gate else "two-layer gate"
-    # Throttle: SKIP/WATCH are written to decisions_log (full audit) but NOT pushed
-    # to Telegram — only real events (ENTRY/fill, close, promotion, kill-switch)
-    # reach the user's DM, so it mirrors the listener's "alert on action" style.
+
+    # Phase 12 immediacy gate: only act when MTF-aligned (don't fight the HTF bias)
+    # and the spread is tight. This keeps entry_threshold at 0.90 — actionability
+    # comes from 1m cadence, NOT a looser bar.
+    if not state.mtf_aligned:
+        if rec.actionable:
+            notifier.notify_decision(pair, DECISION_TF, "WATCH", rec.scoring.chosen_score,
+                                     rec.side or "-", reason + " | MTF not aligned")
+        return
     if rec.actionable:
-        notifier.notify_decision(pair, tf, rec.decision, rec.scoring.chosen_score,
+        notifier.notify_decision(pair, DECISION_TF, rec.decision, rec.scoring.chosen_score,
                                  rec.side or "-", reason)
     if not rec.actionable:
         return
-    trade = lc.open(correlation_id=rec.correlation_id, pair=pair, tf=tf,
+    trade = lc.open(correlation_id=rec.correlation_id, pair=pair, tf=DECISION_TF,
                     side=rec.side, entry_price=entry, size=1.0,
                     leverage=surface.max_leverage, sl_price=sl, tp_price=tp,
                     decision_id=rec.id, spread_bps=state.spread_bps,
                     regime=state.regime, scores=rec.scoring.sub_scores.as_dict())
-    open_trades[(pair, tf, rec.side)] = trade
-    tel.exec_event(rec.correlation_id, pair, tf, "FILL", order_type="LIMIT",
+    open_trades[(pair, DECISION_TF, rec.side)] = trade
+    tel.exec_event(rec.correlation_id, pair, DECISION_TF, "FILL", order_type="LIMIT",
                    side=rec.side, price=entry, qty=1.0, status="FILLED")
-    notifier.notify_fill(pair, tf, rec.side, entry, sl, tp, surface.max_leverage)
+    notifier.notify_fill(pair, DECISION_TF, rec.side, entry, sl, tp, surface.max_leverage)
 
 
 def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier, open_trades):
