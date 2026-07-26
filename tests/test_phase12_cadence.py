@@ -49,8 +49,11 @@ def test_tf_minutes():
 
 
 def test_decide_tick_acts_on_latest_closed_bar():
-    """The decision tick must use the last CLOSED 1m bar (index len-1), not look ahead,
-    and OPEN a position when the 7-factor engine + cross-asset context agree (v0.0.7)."""
+    """v0.1.0: _decide_tick now reads klines from a `klines_cache` (one fetch per pair per
+    cycle, fed by run()'s loop) and evaluates every active strategy on its own decision_tf.
+    A high-conviction bullish state must open at least the scalping profile keyed by
+    (pair, '1m', side) — proving it acts on the latest closed bar and keys by decision_tf.
+    """
     import config, lifecycle, safety, telemetry, db, decision
     from telegram_bot import TelegramNotifier
     from engines import MarketState
@@ -65,26 +68,20 @@ def test_decide_tick_acts_on_latest_closed_bar():
     cap = _Capturer()
     ot: dict = {}
 
-    calls = {}
+    # The cache is the new contract: run() fills it once per pair, _decide_tick reads it.
+    klines_cache = {
+        "1m": _series(100.0, 120, 0.4),
+        "15m": _series(100.0, 120, 6.0),
+        "5m": _series(100.0, 120, 3.0),
+        "1h": _series(100.0, 120, 12.0),
+    }
 
-    def fake_fetch(symbol, tf, limit):
-        calls.setdefault(tf, 0)
-        calls[tf] += 1
-        if tf == "1m":
-            return _series(100.0, 120, 0.4)
-        return _series(100.0, 120, 6.0)
-    b.fetch_klines = fake_fetch
-
-    # Force a high-conviction bullish single-name state + BTC-confirmed context so the
-    # scalping path actually opens (the test's job is cadence + "acts on latest closed
-    # bar", not reproducing the full scoring surface).
     def fake_state(pair, dec_candles, i, contexts):
-        s = MarketState(symbol=pair, tf=b.DECISION_TF, regime="trending_bull",
-                        htf_bias="bullish", mtf_aligned=True, body_ratio=1.0,
-                        vol_z=3.0, delta_z=2.0, atr=1.0, atr_pct=0.01,
-                        hh=True, hl=True, bos=True, choch=True,
-                        liq_sweep=True, eq_low=True, fvg=True,
-                        btc_bias="bullish", risk_regime="bullish",
+        s = MarketState(symbol=pair, tf=dec_candles[0].tf if hasattr(dec_candles[0], "tf") else "1m",
+                        regime="trending_bull", htf_bias="bullish", mtf_aligned=True,
+                        body_ratio=1.0, vol_z=3.0, delta_z=2.0, atr=1.0, atr_pct=0.01,
+                        hh=True, hl=True, bos=True, choch=True, liq_sweep=True, eq_low=True,
+                        fvg=True, btc_bias="bullish", risk_regime="bullish",
                         mtf_confluence=True, pullback_to_anchor=True, alt_breadth=0.8)
         return s
     b.build_state_mtf = fake_state
@@ -94,13 +91,13 @@ def test_decide_tick_acts_on_latest_closed_bar():
                               mtf_confluence=True, pullback_to_anchor=True, alt_breadth=0.8)
     b.build_context_for = fake_ctx
 
-    b._decide_tick("BTCUSDT", conn, surface, lc, tel, kill, decider, cap, ot)
-    # 1m fetched every tick; 15m context fetched once. No future-bar access.
-    assert calls.get("1m", 0) >= 1
-    # v0.0.7: context-aware scalping path opens a position (trade_logs) on an
-    # actionable, BTC-confirmed setup instead of just writing a decisions_log row.
+    b._decide_tick("BTCUSDT", conn, surface, lc, tel, kill, decider, cap, ot,
+                   klines_cache=klines_cache)
+    # A high-conviction setup opens at least the scalping (1m) profile.
     assert conn.execute("SELECT COUNT(*) FROM trade_logs").fetchone()[0] >= 1
-    assert ("BTCUSDT", b.DECISION_TF, "BUY") in ot
+    assert ("BTCUSDT", "1m", "BUY") in ot
+    # The position is keyed by the strategy's own decision_tf (1m), not a global TF.
+    assert any(k[1] == "1m" for k in ot), "scalp position must be keyed on its 1m decision_tf"
 
 
 class _Capturer:

@@ -7,11 +7,16 @@ Kill-switch triggers (doc 30 §7):
   - maintenance / delist   → auto-pause pair
   - losing streak = 5      → 30-minute cooldown (that pair×tf×side)
 
-Promotion gate (doc 30 §6) — per (pair, tf, SIDE), all required:
-  ≥200 PAPER trades (that side) · WR ≥85% (that side) · expectancy > +0.2R ·
-  Max DD < 3% · PF > 1.3 · clean system_health · HUMAN approval.
-LONG and SHORT are promoted independently. Post-live: WR < 85% in the validation
-window → revert to shadow / disable.
+Promotion gate — EXPECTANCY-FIRST (v0.1.0, supersedes the old 85% WR gate).
+Per (pair, tf, SIDE), all required:
+  ≥`min_trades` PAPER trades (that side) · **expectancy > min_expectancy_r** ·
+  **profit_factor > min_pf** · Max DD < 3% · **WR ≥ winrate_floor (default 56%, a FLOOR
+  not a target)** · clean system_health · HUMAN approval.
+
+WHY the change: with R:R ≥ 1.5 the break-even WR after taker fees is ~48%, so demanding
+85% WR rejects thousands of +EV trades and the bot goes silent. A profitable system is
+defined by positive expectancy and PF > 1.2, with WR only as a sanity floor above break-even.
+LONG and SHORT are promoted independently. Post-live: expectancy ≤ 0 OR WR < floor → revert.
 """
 
 from __future__ import annotations
@@ -24,11 +29,16 @@ from evaluation import EvalReport
 
 LOSING_STREAK_LIMIT = 5            # doc 30 §7
 STREAK_COOLDOWN_S = 30 * 60        # doc 30 §7: 30 menit
-PROMOTION_MIN_TRADES = 200         # doc 30 §6
-PROMOTION_WR_PCT = 85.0
-PROMOTION_EXPECTANCY_R = 0.2
+
+# Expectancy-first promotion defaults (v0.1.0). Overridable per-call from the surface.
+PROMOTION_MIN_TRADES = 100         # reachable in paper (was 200)
+PROMOTION_WR_FLOOR_PCT = 56.0      # FLOOR above break-even (was 85 target)
+PROMOTION_EXPECTANCY_R = 0.10      # headline gate: must be genuinely +EV
 PROMOTION_MAX_DD_PCT = 3.0
-PROMOTION_PF = 1.3                 # NOTE: §6 uses 1.3 (stricter than §5's 1.20)
+PROMOTION_PF = 1.20                # doc 30 §5 profit-factor target
+
+# Backward-compat alias (some older code/tests referenced the WR gate constant).
+PROMOTION_WR_PCT = PROMOTION_WR_FLOOR_PCT
 
 
 # --- kill switch ---
@@ -90,7 +100,7 @@ class KillSwitch:
         return until is not None and self.clock() < until
 
 
-# --- promotion gate (doc 30 §6) ---
+# --- promotion gate (expectancy-first, v0.1.0) ---
 
 @dataclass
 class PromotionDecision:
@@ -116,19 +126,29 @@ def promotion_gate(
     human_approved: bool = False,
     live_pairs_count: int = 0,
     global_max_live_pairs: int = 5,
+    *,
+    min_trades: int = PROMOTION_MIN_TRADES,
+    winrate_floor_pct: float = PROMOTION_WR_FLOOR_PCT,
+    min_expectancy_r: float = PROMOTION_EXPECTANCY_R,
+    min_pf: float = PROMOTION_PF,
+    max_dd_pct: float = PROMOTION_MAX_DD_PCT,
 ) -> PromotionDecision:
-    """Evaluate ALL doc 30 §6 criteria for ONE (pair, tf, side). Human gate last."""
+    """Expectancy-first promotion for ONE (pair, tf, side). Human gate last.
+
+    Order of evidence (strongest first): expectancy → profit factor → drawdown →
+    WR floor (sanity, above break-even) → sample size → health → global cap.
+    """
     reasons: list[str] = []
-    if report.n_trades < PROMOTION_MIN_TRADES:
-        reasons.append(f"TRADES: {report.n_trades} < {PROMOTION_MIN_TRADES}")
-    if report.win_rate_pct < PROMOTION_WR_PCT:
-        reasons.append(f"WR: {report.win_rate_pct:.2f}% < {PROMOTION_WR_PCT}%")
-    if report.expectancy_r <= PROMOTION_EXPECTANCY_R:
-        reasons.append(f"EXPECTANCY: {report.expectancy_r:+.3f}R <= +{PROMOTION_EXPECTANCY_R}R")
-    if report.max_dd_pct >= PROMOTION_MAX_DD_PCT:
-        reasons.append(f"MAX_DD: {report.max_dd_pct:.2f}% >= {PROMOTION_MAX_DD_PCT}%")
-    if report.profit_factor <= PROMOTION_PF:
-        reasons.append(f"PF: {report.profit_factor:.2f} <= {PROMOTION_PF}")
+    if report.expectancy_r <= min_expectancy_r:
+        reasons.append(f"EXPECTANCY: {report.expectancy_r:+.3f}R <= +{min_expectancy_r}R")
+    if report.profit_factor <= min_pf:
+        reasons.append(f"PF: {report.profit_factor:.2f} <= {min_pf}")
+    if report.max_dd_pct >= max_dd_pct:
+        reasons.append(f"MAX_DD: {report.max_dd_pct:.2f}% >= {max_dd_pct}%")
+    if report.win_rate_pct < winrate_floor_pct:
+        reasons.append(f"WR: {report.win_rate_pct:.2f}% < floor {winrate_floor_pct}%")
+    if report.n_trades < min_trades:
+        reasons.append(f"TRADES: {report.n_trades} < {min_trades}")
     if not health_clean(conn):
         reasons.append("HEALTH: system_health has FAIL incidents")
     if live_pairs_count >= global_max_live_pairs:
@@ -142,6 +162,15 @@ def promotion_gate(
                              reasons=reasons)
 
 
-def should_demote(report: EvalReport) -> bool:
-    """Post-live: WR < 85% in validation window → revert/disable (doc 30 §6)."""
-    return report.win_rate_pct < PROMOTION_WR_PCT
+def should_demote(
+    report: EvalReport,
+    *,
+    winrate_floor_pct: float = PROMOTION_WR_FLOOR_PCT,
+    min_expectancy_r: float = 0.0,
+) -> bool:
+    """Post-live revert: negative/zero expectancy OR WR below the sanity floor (v0.1.0).
+
+    Expectancy is the primary demotion trigger — a side that stops being +EV must come
+    off live even if its historical WR still looks fine.
+    """
+    return report.expectancy_r <= min_expectancy_r or report.win_rate_pct < winrate_floor_pct

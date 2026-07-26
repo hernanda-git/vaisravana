@@ -102,8 +102,21 @@ class Decision:
     sub_scores: SubScores
 
 
-def decide(s: MarketState, surface: ParameterSurface | None = None) -> Decision:
+def decide(
+    s: MarketState,
+    surface: ParameterSurface | None = None,
+    *,
+    entry_threshold: float | None = None,
+    watch_threshold: float | None = None,
+) -> Decision:
+    """7-factor dual-side decision.
+
+    `entry_threshold` / `watch_threshold` overrides let a StrategyProfile (Scalp/Day/Swing)
+    apply its own activity bar without mutating the shared surface (v0.1.0 multi-strategy).
+    """
     surface = surface or default_surface()
+    entry_bar = surface.entry_threshold if entry_threshold is None else entry_threshold
+    watch_bar = surface.watch_threshold if watch_threshold is None else watch_threshold
     long = score_side(s, "BUY", surface)
     short = score_side(s, "SELL", surface)
     if long >= short:
@@ -111,9 +124,9 @@ def decide(s: MarketState, surface: ParameterSurface | None = None) -> Decision:
     else:
         side, chosen = "SELL", short
 
-    if chosen >= surface.entry_threshold:
+    if chosen >= entry_bar:
         decision = "ENTRY"
-    elif chosen >= surface.watch_threshold:
+    elif chosen >= watch_bar:
         decision = "WATCH"
     else:
         decision = "SKIP"
@@ -130,7 +143,13 @@ def decide(s: MarketState, surface: ParameterSurface | None = None) -> Decision:
     )
 
 
-def decide_ctx(s: MarketState, surface: ParameterSurface | None = None) -> Decision:
+def decide_ctx(
+    s: MarketState,
+    surface: ParameterSurface | None = None,
+    *,
+    entry_threshold: float | None = None,
+    watch_threshold: float | None = None,
+) -> Decision:
     """Context-aware decision (v0.0.7): the 7-factor `decide` PLUS cross-asset + MTF
     relational confirmation.
 
@@ -140,7 +159,8 @@ def decide_ctx(s: MarketState, surface: ParameterSurface | None = None) -> Decis
     so all existing tests on `decide()` keep passing.
     """
     surface = surface or default_surface()
-    base = decide(s, surface)
+    entry_bar = surface.entry_threshold if entry_threshold is None else entry_threshold
+    base = decide(s, surface, entry_threshold=entry_threshold, watch_threshold=watch_threshold)
     if base.decision != "ENTRY" or base.side is None:
         return base  # nothing to confirm/block
 
@@ -168,7 +188,7 @@ def decide_ctx(s: MarketState, surface: ParameterSurface | None = None) -> Decis
     return Decision(
         long_score=base.long_score, short_score=base.short_score,
         side=base.side,
-        decision="ENTRY" if new_score >= surface.entry_threshold else "WATCH",
+        decision="ENTRY" if new_score >= entry_bar else "WATCH",
         chosen_score=round(new_score, 4),
         confidence_pct=round(new_score * 100.0, 2),
         sub_scores=base.sub_scores,

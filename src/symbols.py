@@ -21,6 +21,41 @@ KNOWN_1000X = {
     "1000XECUSDT", "1000RATSUSDT", "1000SATSUSDT", "BOMEUSDT",
 }
 
+# Default monitored universe (v0.1.0). Leaders (BTC/ETH/SOL) + the 12 requested alts.
+# 1000x meme perps use their 1000-prefixed exchange symbol (doc 30 §2 symbol resolution).
+DEFAULT_UNIVERSE = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT",
+    "1000PEPEUSDT", "1000BONKUSDT", "ENAUSDT", "WLDUSDT", "PENGUUSDT",
+    "AAVEUSDT", "TAOUSDT", "INJUSDT", "APEUSDT", "PUMPUSDT", "WIFUSDT", "CRVUSDT",
+]
+
+# User-facing base -> exchange symbol resolution for the 1000x contracts (doc 30 §2:
+# "BONKUSDT->1000BONKUSDT"). Plain perps (ENA/WLD/PENGU/PUMP/...) pass through unchanged.
+_SYMBOL_ALIASES = {
+    "PEPEUSDT": "1000PEPEUSDT",
+    "BONKUSDT": "1000BONKUSDT",
+    "SHIBUSDT": "1000SHIBUSDT",
+    "FLOKIUSDT": "1000FLOKIUSDT",
+    "LUNCUSDT": "1000LUNCUSDT",
+    "RATSUSDT": "1000RATSUSDT",
+    "SATSUSDT": "1000SATSUSDT",
+    "XECUSDT": "1000XECUSDT",
+}
+
+
+def resolve_symbol(user_symbol: str) -> str:
+    """Map a user-supplied pair to its Binance USDⓈ-M exchange symbol.
+
+    Normalizes case, appends USDT if the quote is omitted, and applies the 1000x mapping
+    (e.g. PEPE / PEPEUSDT -> 1000PEPEUSDT). Already-prefixed 1000x symbols pass through.
+    """
+    s = user_symbol.strip().upper()
+    if not s:
+        return s
+    if not s.endswith("USDT"):
+        s = s + "USDT"
+    return _SYMBOL_ALIASES.get(s, s)
+
 
 @dataclass
 class SymbolInfo:

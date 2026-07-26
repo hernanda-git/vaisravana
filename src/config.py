@@ -1,8 +1,16 @@
-"""Project Vaiśravaṇa — parameter surface (doc 21) + bounds.
+"""Project Vaiśravaṇa — parameter surface (doc 21) + bounds + strategy profiles.
 
 Single source of truth for *what the Sentinel may change*. Mirrors
-`docs/21-active-bot.md` exactly. Engine logic, execution code, and telemetry
-schema are OUT OF SCOPE here (see doc 21 "Apa yang TIDAK BOLEH diubah").
+`docs/21-active-bot.md`. Engine logic, execution code, and telemetry schema are OUT OF
+SCOPE here (see doc 21 "Apa yang TIDAK BOLEH diubah").
+
+v0.1.0 (Active Multi-Strategy overhaul):
+  - entry_threshold floor lowered 0.85 -> 0.55: the old 0.86-0.90 "A+ only" bar produced
+    ~0 trades. Break-even WR after taker fees at R:R 1.5 is only ~48%, so a 56% WR floor is
+    genuinely +EV. The bot is now expectancy-first, not vanity-WR-first.
+  - StrategyProfile: Scalping / Day / Swing run concurrently, each with its own TF, SL/TP
+    ATR multipliers, entry threshold, max-hold and cooldown.
+  - winrate_floor_pct (default 56) + min_expectancy_r replace the 85% gate's role.
 
 The only hard invariant: Σ weights == 1.0 (doc 21 §"Syarat konsistensi").
 """
@@ -46,21 +54,85 @@ class Weights(BaseModel):
         return self.model_dump()
 
 
+class StrategyProfile(BaseModel):
+    """One tradable timescale. Scalping / Day / Swing run concurrently (v0.1.0).
+
+    Each profile sets its own entry bar and SL/TP ATR multipliers so a scalp (tight, R:R 1.5)
+    and a swing (wide, R:R 2.0) can be active on the same pair without one starving the other.
+    `context_tfs` are the higher timeframes used for htf_bias / MTF confluence.
+    """
+
+    name: str
+    decision_tf: str                       # the bar we decide + act on
+    context_tfs: list[str] = Field(default_factory=list)
+    entry_threshold: float = Field(ge=0.50, le=0.92)
+    watch_threshold: float = Field(ge=0.40, le=0.85)
+    sl_atr_mult: float = Field(ge=0.8, le=3.0)
+    tp_atr_mult: float = Field(ge=1.0, le=6.0)
+    max_hold_min: int = Field(ge=1, le=10080)
+    cooldown_min: int = Field(default=5, ge=0, le=240)
+    winrate_floor_pct: float = Field(default=56.0, ge=50.0, le=85.0)
+
+    @property
+    def rr(self) -> float:
+        """Reward:risk ratio (tp/sl)."""
+        return self.tp_atr_mult / self.sl_atr_mult if self.sl_atr_mult else 0.0
+
+    @model_validator(mode="after")
+    def _watch_below_entry(self) -> "StrategyProfile":
+        if self.watch_threshold >= self.entry_threshold:
+            raise ValueError(
+                f"[{self.name}] watch_threshold ({self.watch_threshold}) must be < "
+                f"entry_threshold ({self.entry_threshold})"
+            )
+        return self
+
+
+def default_profiles() -> dict[str, StrategyProfile]:
+    """The three concurrent strategies (v0.1.0).
+
+    Thresholds/mults chosen from the break-even-WR analysis (docs/44-active-strategy.md):
+      Scalp  R:R 1.5 -> BE WR 48% -> 56% floor = +0.20R
+      Day    R:R 1.67 -> BE WR 41% -> 54% floor = +0.30R
+      Swing  R:R 2.0 -> BE WR 35% -> 52% floor = +0.40R
+    """
+    return {
+        "scalping": StrategyProfile(
+            name="scalping", decision_tf="1m", context_tfs=["5m", "15m"],
+            entry_threshold=0.60, watch_threshold=0.52,
+            sl_atr_mult=1.0, tp_atr_mult=1.5, max_hold_min=15, cooldown_min=2,
+            winrate_floor_pct=56.0,
+        ),
+        "day": StrategyProfile(
+            name="day", decision_tf="15m", context_tfs=["1h", "4h"],
+            entry_threshold=0.58, watch_threshold=0.50,
+            sl_atr_mult=1.5, tp_atr_mult=2.5, max_hold_min=240, cooldown_min=15,
+            winrate_floor_pct=54.0,
+        ),
+        "swing": StrategyProfile(
+            name="swing", decision_tf="1h", context_tfs=["4h", "1d"],
+            entry_threshold=0.56, watch_threshold=0.48,
+            sl_atr_mult=2.0, tp_atr_mult=4.0, max_hold_min=2880, cooldown_min=60,
+            winrate_floor_pct=52.0,
+        ),
+    }
+
+
 class ParameterSurface(BaseModel):
     """The full mutable parameter surface (doc 21).
 
-    Defaults mirror the *concrete spec* (doc 30 / doc 21): entry 0.90,
-    tp 1.05, sl 1.0, lev 2, daily_loss 0.5%, risk 0.25%, WR gate 85%,
-    min_trades 200, global_max_live 5.
+    v0.1.0: entry/watch floors lowered so the bot is active; the 85% WR gate is demoted to an
+    advisory field (`winrate_gate_pct`) and replaced operationally by `winrate_floor_pct` +
+    `min_expectancy_r` (expectancy-first promotion; see safety.promotion_gate).
     """
 
     weights: Weights = Field(default_factory=Weights)
 
-    entry_threshold: float = Field(default=0.86, ge=0.85, le=0.92)
-    watch_threshold: float = Field(default=0.78, ge=0.78, le=0.85)
+    entry_threshold: float = Field(default=0.60, ge=0.50, le=0.92)
+    watch_threshold: float = Field(default=0.52, ge=0.40, le=0.85)
 
-    sl_atr_mult: float = Field(default=1.0, ge=0.8, le=2.0)
-    tp_atr_mult: float = Field(default=1.25, ge=1.0, le=2.0)
+    sl_atr_mult: float = Field(default=1.0, ge=0.8, le=3.0)
+    tp_atr_mult: float = Field(default=1.5, ge=1.0, le=6.0)
 
     max_leverage: int = Field(default=3, ge=1, le=3)
     cooldown_after_loss: int = Field(default=5, ge=0, le=60)
@@ -69,8 +141,11 @@ class ParameterSurface(BaseModel):
     risk_per_trade_pct: float = Field(default=0.25, ge=0.10, le=0.50)
     max_position_notional_pct: float = Field(default=50.0, ge=10.0, le=60.0)
 
-    winrate_gate_pct: float = Field(default=85.0, ge=80.0, le=95.0)
-    min_trades_for_promote: int = Field(default=200, ge=100, le=500)
+    # Expectancy-first promotion (v0.1.0). winrate_gate_pct kept for backward-compat/advisory.
+    winrate_floor_pct: float = Field(default=56.0, ge=50.0, le=85.0)
+    min_expectancy_r: float = Field(default=0.10, ge=0.0, le=1.0)
+    winrate_gate_pct: float = Field(default=85.0, ge=50.0, le=95.0)
+    min_trades_for_promote: int = Field(default=100, ge=30, le=500)
     global_max_live_pairs: int = Field(default=5, ge=1, le=20)
 
     @model_validator(mode="after")
@@ -87,5 +162,5 @@ class ParameterSurface(BaseModel):
 
 
 def default_surface() -> ParameterSurface:
-    """Return a fresh default ParameterSurface (doc 21 / doc 30 defaults)."""
+    """Return a fresh default ParameterSurface (doc 21 / v0.1.0 active defaults)."""
     return ParameterSurface()

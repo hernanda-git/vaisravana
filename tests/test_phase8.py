@@ -75,8 +75,12 @@ def test_win_resets_streak():
 
 # --- promotion gate integration (plan Phase 8 item 5) ---
 
-def _simulate(conn, n_win, n_loss, side="BUY"):
+def _simulate(conn, n_win, n_loss, side="BUY", tp_price=None, sl_price=None):
     lc = TradeLifecycle(conn)
+    # default R:R 1.25 (win r=+1.25, loss r=-1.0). Callers can pass custom tp/sl to
+    # craft a high-WR-but-negative-expectancy (fee-bleed) series.
+    win_px = tp_price if tp_price is not None else (101.25 if side == "BUY" else 98.75)
+    loss_px = sl_price if sl_price is not None else (99.0 if side == "BUY" else 101.0)
     # interleave losses evenly to avoid a terminal DD block
     seq = []
     ratio = max(1, n_win // max(1, n_loss))
@@ -94,9 +98,9 @@ def _simulate(conn, n_win, n_loss, side="BUY"):
                     tp_price=101.25 if side == "BUY" else 98.75)
 
         if o == "W":
-            lc.close(t, exit_price=101.25 if side == "BUY" else 98.75, close_reason="TP")
+            lc.close(t, exit_price=win_px, close_reason="TP")
         else:
-            lc.close(t, exit_price=99.0 if side == "BUY" else 101.0, close_reason="SL")
+            lc.close(t, exit_price=loss_px, close_reason="SL")
 
 
 def test_200_trades_at_90pct_wr_is_promotion_eligible(conn):
@@ -110,12 +114,35 @@ def test_200_trades_at_90pct_wr_is_promotion_eligible(conn):
     assert dec2.live
 
 
-def test_wr_below_85_never_promoted(conn):
-    _simulate(conn, 160, 40)   # 80% WR
+def test_moderate_wr_positive_expectancy_promotes(conn):
+    """v0.1.0 expectancy-first: 60% WR at R:R 1.25 (+0.35R, PF 1.9) is genuinely +EV
+    and MUST promote — the old 85% gate wrongly rejected exactly this profitable case."""
+    _simulate(conn, 120, 80)   # 60% WR over 200
     rep = evaluate(conn, "BTCUSDT", "5m", "BUY")
+    assert rep.win_rate_pct == pytest.approx(60.0)
+    assert rep.expectancy_r > 0.10
+    dec = promotion_gate(rep, conn, human_approved=True)
+    assert dec.live, dec.reasons
+
+
+def test_high_wr_negative_expectancy_never_promoted(conn):
+    """Fee-bleed trap: 90% WR but tiny wins (+0.1R) vs big losses (-2R) => -0.11R, PF<1.
+    Expectancy-first gate must REJECT this even though WR looks stellar."""
+    _simulate(conn, 180, 20, tp_price=100.1, sl_price=98.0)  # win r=+0.1, loss r=-2.0
+    rep = evaluate(conn, "BTCUSDT", "5m", "BUY")
+    assert rep.win_rate_pct == pytest.approx(90.0)
+    assert rep.expectancy_r <= 0.10
     dec = promotion_gate(rep, conn, human_approved=True)
     assert not dec.eligible and not dec.live
-    assert any("WR" in r for r in dec.reasons)
+    assert any("EXPECTANCY" in r or "PF" in r for r in dec.reasons)
+
+
+def test_wr_below_floor_blocks_promotion(conn):
+    """WR below the 56% sanity floor blocks promotion even if other metrics pass."""
+    _simulate(conn, 100, 100)   # 50% WR < 56% floor
+    rep = evaluate(conn, "BTCUSDT", "5m", "BUY")
+    dec = promotion_gate(rep, conn, human_approved=True)
+    assert not dec.live and any("WR" in r for r in dec.reasons)
 
 
 def test_dirty_health_blocks_promotion(conn):
@@ -136,9 +163,17 @@ def test_global_live_cap_blocks(conn):
 
 
 def test_post_live_demotion_on_wr_drop(conn):
-    _simulate(conn, 160, 40)
+    # v0.1.0: demotion is expectancy-first. A negative-expectancy series (90% WR but
+    # +0.1R wins vs -2R losses => -0.11R) must demote despite the high WR.
+    _simulate(conn, 180, 20, tp_price=100.1, sl_price=98.0)
     rep = evaluate(conn, "BTCUSDT", "5m", "BUY")
     assert should_demote(rep)
+    # a healthy +EV side (60% WR, +0.35R) must NOT demote
+    conn.execute("DELETE FROM trade_logs")
+    conn.commit()
+    _simulate(conn, 120, 80)
+    rep_ok = evaluate(conn, "BTCUSDT", "5m", "BUY")
+    assert not should_demote(rep_ok)
 
 
 # --- paper orchestrator end-to-end (doc 30 §9 flow) ---
@@ -147,10 +182,10 @@ def test_orchestrator_full_cycle_decision_to_eval(conn):
     orch = PaperOrchestrator(conn)
     out = orch.on_candle_close(_bull(), entry_price=100.0, atr=1.0)
     assert out.record.actionable and out.opened is not None
-    # SL/TP derived from ATR multipliers (doc 21: sl 1.0×ATR, tp 1.25×ATR scalping tune)
+    # SL/TP derived from ATR multipliers (v0.1.0 default: sl 1.0×ATR, tp 1.5×ATR, R:R 1.5)
     assert out.opened.sl_price == pytest.approx(99.0)
-    assert out.opened.tp_price == pytest.approx(101.25)
-    rep = orch.close_trade("BTCUSDT", "5m", "BUY", exit_price=101.25, reason="TP")
+    assert out.opened.tp_price == pytest.approx(101.5)
+    rep = orch.close_trade("BTCUSDT", "5m", "BUY", exit_price=101.5, reason="TP")
     assert rep.n_trades == 1 and rep.win_rate_pct == 100.0
     # full audit trail exists
     assert conn.execute("SELECT COUNT(*) c FROM decisions_log").fetchone()["c"] == 1

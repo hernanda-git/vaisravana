@@ -48,10 +48,19 @@ from monitor import PositionMonitor, Position  # noqa: E402
 from execution import place_stop_loss  # noqa: E402
 from marketcontext import build_context, ContextSeries, MarketContext  # noqa: E402
 from scoring import decide, decide_ctx  # noqa: E402
+from strategy import active_strategies, evaluate_strategy  # noqa: E402
+from config import default_profiles  # noqa: E402
+from symbols import resolve_symbol, DEFAULT_UNIVERSE  # noqa: E402
 
 log = logging.getLogger("vaisravana.bot")
 
 PAIRS = os.getenv("VAISRAVANA_PAIRS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
+TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
+# v0.1.0: monitored universe defaults to the 15-pair mix (leaders + 12 requested alts).
+# Resolved through symbols.resolve_symbol() so "PEPE"/"BONK" map to their 1000x contract.
+PAIRS = [resolve_symbol(p) for p in
+         os.getenv("VAISRAVANA_PAIRS", ",".join(DEFAULT_UNIVERSE)).split(",") if p]
+# The higher structural contexts every strategy reads for bias + structure.
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
 FETCH_URL = "https://fapi.binance.com/fapi/v1/klines?symbol={s}&interval={t}&limit={n}"
 FETCH_LIMIT = int(os.getenv("VAISRAVANA_KLINES", "600"))
@@ -64,6 +73,12 @@ SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", "/data/surface.json")
 #                  making the existing 7-factor engine multi-timeframe WITHOUT engine edits.
 DECISION_TF = os.getenv("VAISRAVANA_DECISION_TF", "1m")
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
+# v0.1.0: concurrent multi-strategy. The default scalping DECISION_TF (1m) drives the
+# scalping profile; Day=15m and Swing=1h profiles run in parallel. Each strategy's own
+# decision_tf is taken from its StrategyProfile, NOT this global, so the three horizons
+# are genuinely independent (and the (pair, decision_tf, side) key keeps them apart).
+PROFILES = default_profiles()
+ACTIVE_PROFILES = active_strategies()
 # Phase 11 opt-in: off | research | research+context. Default OFF (deterministic).
 LLM_MODE = os.getenv("VAISRAVANA_LLM", "off")
 # LLM transport (OpenAI-compatible chat/completions). Defaults to OpenCode Zen gateway.
@@ -322,6 +337,9 @@ def run() -> None:
         log.warning("VAISRAVANA_LLM=%s but ZEN_API_KEY unset — research disabled", LLM_MODE)
 
     last_status = 0.0
+    # v0.1.0: the unique decision timeframes actually used by active strategies, so we
+    # fetch each only once per pair per cycle (scalp=1m, day=15m, swing=1h default).
+    decision_tfs = sorted({p.decision_tf for p in ACTIVE_PROFILES}, key=b._tf_minutes)
     while True:
         try:
             # roll daily-loss window at UTC midnight
@@ -332,29 +350,39 @@ def run() -> None:
             daily_loss_pct = (realized_loss_today["usd"] / equity * 100.0) if equity else 0.0
             # mark feed health from the latest candle we just fetched
             for pair in PAIRS:
-                feed.mark(pair, DECISION_TF, int(time.time() * 1000))
-                for tf in TFS:
+                for tf in decision_tfs + TFS:
                     feed.mark(pair, tf, int(time.time() * 1000))
-            feed_frozen = bool(feed.frozen_list(PAIRS, [DECISION_TF] + TFS))
+            feed_frozen = bool(feed.frozen_list(PAIRS, decision_tfs + TFS))
             for pair in PAIRS:
-                # Phase 12: one decision per minute on DECISION_TF (1m), using MTF context.
+                # v0.1.0: fetch all decision TFs + structural contexts ONCE per pair,
+                # cache them, and hand the cache to _decide_tick so each strategy reads
+                # its own decision_tf without re-fetching.
+                klines_cache: dict[str, list] = {}
+                need = list(DECISION_TFS) + list(TFS)
+                for tf in need:
+                    try:
+                        cs = fetch_klines(pair, tf, FETCH_LIMIT)
+                    except Exception:
+                        cs = []
+                    klines_cache[tf] = cs
                 _decide_tick(pair, conn, surface, lc, tel, kill, decider,
                              notifier, open_trades, registry=registry,
                              daily_loss_pct=daily_loss_pct, feed_frozen=feed_frozen,
                              equity=equity, loss_book=realized_loss_today,
-                             monitor=monitor, exchange=exchange, guard=guard)
+                             monitor=monitor, exchange=exchange, guard=guard,
+                             klines_cache=klines_cache)
                 # push the latest price into the sim exchange so the monitor's
                 # mark-price SL/TP/orphan/maxhold logic is real (doc 30 §3, doc 32 L4)
-                _last_decs = fetch_klines(pair, DECISION_TF, 2)
+                _last_decs = klines_cache.get(DECISION_TF) or []
                 if _last_decs:
                     exchange.set_price(pair, _last_decs[-1].c)
             # drive the position monitor every cycle (real SL/maxhold/orphan handling)
             for ev in monitor.tick():
-                t = open_trades.pop((ev.symbol, DECISION_TF, ev.side), None)
+                t = open_trades.pop((ev.symbol, ev.tf, ev.side), None)
                 if t is None:
                     continue
                 res = lc.close(t, exit_price=ev.price, close_reason=ev.reason)
-                kill.record_close(ev.symbol, DECISION_TF, ev.side, win=bool(res["win"]))
+                kill.record_close(ev.symbol, ev.tf, ev.side, win=bool(res["win"]))
                 if loss_book is not None and res["pnl_usd"] < 0:
                     loss_book["usd"] += -res["pnl_usd"]
                 tel.exec_event(t.correlation_id, ev.symbol, DECISION_TF, "CLOSE",
@@ -497,129 +525,112 @@ def research_loop(notifier: TelegramNotifier, db_path: str = DB_PATH) -> None:
 
 def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_trades,
                 registry=None, daily_loss_pct=0.0, feed_frozen=False, equity=1000.0,
-                loss_book=None, monitor=None, exchange=None, guard=None):
+                loss_book=None, monitor=None, exchange=None, guard=None,
+                klines_cache=None):
     """Phase 12 — time-sensitive decision tick.
 
     Fetches the 1m (DECISION_TF) series + each structural context TF, builds an MTF
     MarketState on the latest closed 1m bar, decides, and (if actionable + MTF-aligned +
     spread tight) opens a PAPER position at that close — i.e. jumps immediately.
     """
-    dec = fetch_klines(pair, DECISION_TF, FETCH_LIMIT)
-    if len(dec) < 60:
-        return
-    contexts = {}
-    for tf in TFS:
-        if tf == DECISION_TF:
+    cache = klines_cache or {}
+    for profile in ACTIVE_PROFILES:
+        dtf = profile.decision_tf
+        dec = cache.get(dtf)
+        if dec is None or len(dec) < 60:
             continue
-        c = fetch_klines(pair, tf, FETCH_LIMIT)
-        if len(c) >= 50:
-            contexts[tf] = c
-    i = len(dec) - 1
-    state = build_state_mtf(pair, dec, i, contexts)
-    # v0.0.7: fold cross-asset + MTF relational context into the decision state
-    try:
-        ctx = build_context_for(pair, dec, i, contexts)
-        state.btc_bias = ctx.btc_bias
-        state.btc_ret = ctx.btc_ret
-        state.dominance_delta = ctx.dominance_delta
-        state.risk_regime = ctx.risk_regime
-        state.alt_rs_btc = ctx.alt_rs_btc
-        state.alt_breadth = ctx.alt_breadth
-        state.ltf_bias = ctx.ltf_bias
-        state.mtf_bias = ctx.mtf_bias
-        state.htf_bias2 = ctx.htf_bias
-        state.mtf_confluence = ctx.mtf_confluence
-        state.pullback_to_anchor = ctx.pullback_to_anchor
-    except Exception as e:  # best-effort: never let context fetch break the loop
-        log.debug("context build failed for %s: %s", pair, e)
+        contexts = {tf: cache[tf] for tf in TFS
+                    if tf in cache and tf != dtf and len(cache[tf]) >= 50}
+        i = len(dec) - 1
+        state = build_state_mtf(pair, dec, i, contexts)
+        try:
+            ctx = build_context_for(pair, dec, i, contexts)
+            state.btc_bias = ctx.btc_bias
+            state.btc_ret = ctx.btc_ret
+            state.dominance_delta = ctx.dominance_delta
+            state.risk_regime = ctx.risk_regime
+            state.alt_rs_btc = ctx.alt_rs_btc
+            state.alt_breadth = ctx.alt_breadth
+            state.ltf_bias = ctx.ltf_bias
+            state.mtf_bias = ctx.mtf_bias
+            state.htf_bias2 = ctx.htf_bias
+            state.mtf_confluence = ctx.mtf_confluence
+            state.pullback_to_anchor = ctx.pullback_to_anchor
+        except Exception as e:  # best-effort: never let context fetch break the loop
+            log.debug("context build failed for %s/%s: %s", pair, dtf, e)
 
-    # manage an existing position on this pair (any structural tf) by its 1m print
-    key = None
-    for k in list(open_trades.keys()):
-        if k[0] == pair:
-            t = open_trades[k]
+        # manage an existing position for THIS strategy (keyed by its decision_tf)
+        existing = open_trades.get((pair, dtf, None)) if None in (
+            open_trades.get((pair, dtf, "BUY")), open_trades.get((pair, dtf, "SELL"))) else None
+        t = open_trades.get((pair, dtf, "BUY")) or open_trades.get((pair, dtf, "SELL"))
+        if t is not None:
             bar = dec[i]
             hit_tp = (t.side == "BUY" and bar.h >= t.tp_price) or \
                      (t.side == "SELL" and bar.l <= t.tp_price)
             hit_sl = (t.side == "BUY" and bar.l <= t.sl_price) or \
                      (t.side == "SELL" and bar.h >= t.sl_price)
             if hit_tp:
-                _close(pair, k[1], k[2], t.tp_price, "TP", conn, lc, tel, kill,
+                _close(pair, dtf, t.side, t.tp_price, "TP", conn, lc, tel, kill,
                        notifier, open_trades, loss_book=loss_book)
             elif hit_sl:
-                _close(pair, k[1], k[2], t.sl_price, "SL", conn, lc, tel, kill,
+                _close(pair, dtf, t.side, t.sl_price, "SL", conn, lc, tel, kill,
                        notifier, open_trades, loss_book=loss_book)
-            else:
-                key = k
-            break
-    if key is not None:
-        return  # one open position per pair; wait for it to close
+            continue  # this strategy already has a position; move to the next profile
 
-    # kill-switch gate (real daily-loss + feed-health, doc 30 §7)
-    tripped, reason = kill.check_global(daily_loss_pct=daily_loss_pct,
-                                        adl_rank=1, feed_frozen=feed_frozen)
-    if tripped:
-        tel.health("kill_switch", "FAIL", detail=reason)
-        notifier.notify_kill_switch(reason)
-        return
+        # kill-switch gate (real daily-loss + feed-health, doc 30 §7) — checked once per tick
+        if profile is ACTIVE_PROFILES[0]:
+            tripped, kreason = kill.check_global(daily_loss_pct=daily_loss_pct,
+                                                 adl_rank=1, feed_frozen=feed_frozen)
+            if tripped:
+                tel.health("kill_switch", "FAIL", detail=kreason)
+                notifier.notify_kill_switch(kreason)
+                return
 
-    # decide + open (PAPER) on the latest closed 1m bar — context-aware (v0.0.7)
-    rec = decide_ctx(state, surface)
-    if rec.decision != "ENTRY" or rec.side is None:
-        # WATCH/SKIP: report if the base 7-factor engine thought it was actionable
-        if rec.decision == "WATCH":
-            notifier.notify_decision(pair, DECISION_TF, "WATCH", rec.chosen_score,
-                                     rec.side or "-", "context gate / below threshold")
-        return
-    prelim = rec  # alias for the SL/TP derivation below
-    corr_id = f"{pair}-{DECISION_TF}-{int(time.time()*1000)}-{rec.side}"
-    atr = state.atr or dec[i].c * state.atr_pct
-    entry = dec[i].c
-    sl = (entry + surface.sl_atr_mult * atr) if prelim.side == "SELL" else \
-         (entry - surface.sl_atr_mult * atr)
-    tp = (entry - surface.tp_atr_mult * atr) if prelim.side == "SELL" else \
-         (entry + surface.tp_atr_mult * atr)
-    # NOTE: `decide_ctx` already applied the 7-factor engine + relational boost + the
-    # hard context gate + the entry_threshold. The older DecisionOrchestrator two-layer
-    # gate (decider.process) is intentionally NOT re-run here — decide_ctx is authoritative
-    # for the scalping path. `rec` (from decide_ctx) carries side + chosen_score.
-    reason = "context-aware entry (7-factor + BTC/dominance/MTF confluence)"
+        # decide under THIS strategy's profile (own entry bar + SL/TP mults)
+        se = evaluate_strategy(profile, state, entry_price=dec[i].c,
+                               atr=(dec[i].c * state.atr_pct), surface=surface)
+        if se.decision != "ENTRY":
+            if se.decision == "WATCH":
+                notifier.notify_decision(pair, dtf, "WATCH", se.chosen_score,
+                                         se.side, f"{profile.name} below threshold")
+            continue
 
-    # --- hard live boundary: in LIVE mode this raises unless human-approved ---
-    if guard is not None:
-        guard.assert_entry_allowed(pair, DECISION_TF, rec.side)
-    # real risk-based sizing (doc 30 §3): 0.25% equity at the SL distance — replaces
-    # the previous hardcoded size=1.0, which silently ignored the risk engine.
-    info = (registry or SymbolRegistry()).get(pair)
-    sl_distance = abs(entry - sl)
-    qty = 1.0
-    if info is not None and sl_distance > 0 and entry > 0:
-        qty = size_position(equity=equity,
-                            risk_per_trade_pct=surface.risk_per_trade_pct,
-                            entry=entry, sl_price=sl, leverage=surface.max_leverage,
-                            info=info, max_position_notional_pct=surface.max_position_notional_pct)
-        qty = qty if qty > 0 else 1.0  # degenerate market -> fall back (skip), else minimal
-    trade = lc.open(correlation_id=corr_id, pair=pair, tf=DECISION_TF,
-                    side=rec.side, entry_price=entry, size=qty,
-                    leverage=surface.max_leverage, sl_price=sl, tp_price=tp,
-                    decision_id=corr_id, spread_bps=state.spread_bps,
-                    regime=state.regime, scores=rec.sub_scores.as_dict())
-    open_trades[(pair, DECISION_TF, rec.side)] = trade
-    # REAL protective stop on the (simulated) exchange + hand the position to the
-    # PositionMonitor so SL/TP/maxhold/orphan are managed every tick (doc 30 §3, doc 32 L4).
-    sl_state = place_stop_loss(exchange, pair, rec.side, qty, sl) if exchange else None
-    if monitor is not None:
-        monitor.track(Position(
-            correlation_id=corr_id, symbol=pair, tf=DECISION_TF,
-            side=rec.side, qty=qty, entry_price=entry,
-            sl=sl_state or __import__("execution").StopLossState(
-                "CONDITIONAL", sl, "SELL" if rec.side == "BUY" else "BUY"),
-            tp_price=tp, opened_ts=time.time(),
-            sl_on_exchange=False,  # paper sim doesn't fill stops -> monitor polls mark
-        ))
-    tel.exec_event(corr_id, pair, DECISION_TF, "FILL", order_type="LIMIT",
-                   side=rec.side, price=entry, qty=qty, status="FILLED")
-    notifier.notify_fill(pair, DECISION_TF, rec.side, entry, sl, tp, surface.max_leverage)
+        corr_id = f"{pair}-{dtf}-{int(time.time()*1000)}-{se.side}"
+        entry = se.entry_price
+        sl, tp = se.sl_price, se.tp_price
+        # --- hard live boundary: in LIVE mode this raises unless human-approved ---
+        if guard is not None:
+            guard.assert_entry_allowed(pair, dtf, se.side)
+        # real risk-based sizing (doc 30 §3): 0.25% equity at the SL distance
+        info = (registry or SymbolRegistry()).get(pair)
+        sl_distance = abs(entry - sl)
+        qty = 1.0
+        if info is not None and sl_distance > 0 and entry > 0:
+            qty = size_position(equity=equity,
+                                risk_per_trade_pct=surface.risk_per_trade_pct,
+                                entry=entry, sl_price=sl, leverage=surface.max_leverage,
+                                info=info, max_position_notional_pct=surface.max_position_notional_pct)
+            qty = qty if qty > 0 else 1.0
+        trade = lc.open(correlation_id=corr_id, pair=pair, tf=dtf,
+                        side=se.side, entry_price=entry, size=qty,
+                        leverage=surface.max_leverage, sl_price=sl, tp_price=tp,
+                        decision_id=corr_id, spread_bps=state.spread_bps,
+                        regime=state.regime, scores=se.sub_scores.as_dict())
+        open_trades[(pair, dtf, se.side)] = trade
+        sl_state = place_stop_loss(exchange, pair, se.side, qty, sl) if exchange else None
+        if monitor is not None:
+            monitor.track(Position(
+                correlation_id=corr_id, symbol=pair, tf=dtf,
+                side=se.side, qty=qty, entry_price=entry,
+                sl=sl_state or __import__("execution").StopLossState(
+                    "CONDITIONAL", sl, "SELL" if se.side == "BUY" else "BUY"),
+                tp_price=tp, opened_ts=time.time(),
+                sl_on_exchange=False,
+            ))
+        tel.exec_event(corr_id, pair, dtf, "FILL", order_type="LIMIT",
+                       side=se.side, price=entry, qty=qty, status="FILLED")
+        notifier.notify_fill(pair, dtf, se.side, entry, sl, tp, surface.max_leverage,
+                             strategy=profile.name)
 
 
 def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,

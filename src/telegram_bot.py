@@ -110,10 +110,11 @@ class TelegramNotifier:
         return self.send_message(text)
 
     def notify_fill(self, pair: str, tf: str, side: str, entry: float,
-                    sl: float, tp: float, lev: float) -> bool:
+                    sl: float, tp: float, lev: float, strategy: str = "") -> bool:
+        strat = f" · <b>{html_escape(strategy)}</b>" if strategy else ""
         text = (
             f"📈 <b>PAPER FILL</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
-            f"<code>{html_escape(side)}</code>\n"
+            f"<code>{html_escape(side)}</code>{strat}\n"
             f"entry: <code>{entry:.2f}</code> · sl: <code>{sl:.2f}</code> · "
             f"tp: <code>{tp:.2f}</code> · lev: <code>{lev}x</code>\n"
             f"🕐 <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>"

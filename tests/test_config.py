@@ -10,14 +10,16 @@ from config import ParameterSurface, Weights  # noqa: E402
 
 def test_default_surface_is_valid():
     s = ParameterSurface()
-    assert s.entry_threshold == 0.86
-    assert s.tp_atr_mult == 1.25
+    assert s.entry_threshold == 0.60
+    assert s.tp_atr_mult == 1.5
     assert s.sl_atr_mult == 1.0
     assert s.max_leverage == 3
     assert s.daily_loss_limit_pct == 0.5
     assert s.risk_per_trade_pct == 0.25
-    assert s.winrate_gate_pct == 85.0
-    assert s.min_trades_for_promote == 200
+    assert s.winrate_floor_pct == 56.0
+    assert s.min_expectancy_r == 0.10
+    assert s.winrate_gate_pct == 85.0          # advisory, kept for backward-compat
+    assert s.min_trades_for_promote == 100
     assert s.global_max_live_pairs == 5
 
 
@@ -28,7 +30,7 @@ def test_weights_sum_to_one():
 
 def test_entry_threshold_bound_enforced():
     try:
-        ParameterSurface(entry_threshold=0.50)  # below 0.85 floor
+        ParameterSurface(entry_threshold=0.40)  # below 0.50 floor
         assert False, "should have raised"
     except Exception as e:
         assert "entry_threshold" in str(e) or "ge" in str(e)

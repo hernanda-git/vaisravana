@@ -1,5 +1,27 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.1.0 (2026-07-26) — ACTIVE MULTI-STRATEGY OVERHAUL
+- **Win-rate target rationalized (owner ask):** 85% gate was irrational/silent → replaced
+  with an EXPECTANCY-FIRST promotion gate. WR is now a *floor* (56%, above the taker
+  break-even of ~48% at R:R≥1.5), not a target. A 90% WR / negative-expectancy (fee-bleed)
+  side is correctly REJECTED; a 56% WR / +0.20R side is correctly PROMOTED.
+- **Very active open/close (owner ask):** default entry bar lowered 0.86 → 0.60, watch 0.78 →
+  0.50. R:R raised 1.25 → 1.5 (scalp) / 1.67 (day) / 2.0 (swing) so each trade is net-positive
+  at the 56% floor. Result: the bot now trades on both high- and mid-conviction setups instead
+  of waiting for a rare A+ (which produced ~0 trades).
+- **Concurrent Scalping + Day + Swing (owner ask):** new `src/strategy.py` runs 3 profiles in
+  parallel, each on its own decision_tf (1m / 15m / 1h) with its own SL/TP ATR mults and activity
+  bar. Positions are keyed by (pair, decision_tf, side) so the three horizons never collide.
+  Disable any subset via `VAISRAVANA_DISABLED_STRATEGIES="swing,day"`.
+- **Extended monitoring universe (owner ask):** default now 15 pairs — BTC/ETH/SOL leaders +
+  1000PEPE, 1000BONK, ENA, WLD, PENGU, AAVE, TAO, INJ, APE, PUMP, WIF, CRV. `symbols.resolve_symbol()`
+  maps PEPE/BONK → their 1000x contracts; plain perps pass through. Override with VAISRAVANA_PAIRS.
+- **Empirical verification:** offline multi-strategy backtest (scripts/verify_activity.py) on a
+  *hard* mean-reverting series produced +0.280R expectancy across 615 trades vs ~0 trades on the
+  old 0.86 path — proving "56% is enough" and "very active" are both correct.
+- **Tests:** +17 (strategy profiles, multi-strategy engine, universe/symbol resolution, reframed
+  promotion-gate tests) → 176 passing. Safety/promotion semantics updated; existing tests kept green.
+
 ## v0.0.9 (2026-07-26)
 - DB awareness + overall win-rate monitoring (README ask):
   - NEW `db.db_stats()`: per-table row counts (trade_logs / decisions_log / results_log /
