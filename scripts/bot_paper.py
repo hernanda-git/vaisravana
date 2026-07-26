@@ -199,18 +199,11 @@ def run() -> None:
     )
     open_trades: dict[tuple, object] = lc.get_open_positions()
     ver = vmod.read_version()
-    log.info("Vaiśravaṇa PAPER bot up: %d pairs · decide=%s · ctx=%s · v%s · %d open positions reloaded "
+    log.info("Vessavaṇa PAPER bot up: %d pairs · decide=%s · ctx=%s · v%s · %d open positions reloaded "
              "(LLM=%s)", len(PAIRS), DECISION_TF, ",".join(TFS), ver, len(open_trades), LLM_MODE)
-    notifier.notify_status(
-        "Vaiśravaṇa PAPER bot started",
-        f"pairs: {', '.join(PAIRS)}\n"
-        f"decide every: {DECISION_TF} (jump immediately on close)\n"
-        f"context tfs: {', '.join(TFS)} (MTF bias/alignment)\n"
-        f"cycle: {CYCLE_S}s\n"
-        f"mode: PAPER (no live orders)\nLLM research: {LLM_MODE}\n"
-        f"open positions reloaded: {len(open_trades)}",
-    )
-    # Phase 13: announce the deployed version + what changed on every (re)start.
+    # Phase 13: clean startup card (Bahasa Indonesia, brand Vessavaṇa)
+    notifier.notify_startup(ver, PAIRS, DECISION_TF, TFS, CYCLE_S, LLM_MODE, len(open_trades))
+    # announce the deployed version + what changed on every (re)start
     notifier.notify_deploy(ver, vmod.latest_changelog())
 
     # Phase 11: start the offline LLM research loop (propose-only Sentinel).
@@ -235,7 +228,7 @@ def run() -> None:
                 last_status = time.time()
         except Exception as e:  # never die silently — Surface restarts, but report first
             log.exception("loop error: %s", e)
-            notifier.send_message(f"⚠️ **Vaiśravaṇa loop error**\n_{e}_")
+            notifier.send_message(f"⚠️ **Vessavaṇa — error loop**\n_{e}_")
             time.sleep(30)
             continue
         time.sleep(CYCLE_S)
@@ -520,8 +513,8 @@ def _report_status(conn: sqlite3.Connection, notifier: TelegramNotifier) -> None
         lines.append(f"`{pair} {tf} {side}`: n={rep.n_trades} WR={rep.win_rate_pct:.1f}% "
                      f"Exp={rep.expectancy_r:+.2f}R")
     if not lines:
-        lines.append("_no trades yet_")
-    notifier.notify_status("Vaiśravaṇa status (30m)", "\n".join(lines))
+        lines.append("_Belum ada trade dieksekusi._")
+    notifier.notify_status_30m(lines)
 
 
 if __name__ == "__main__":

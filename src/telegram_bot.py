@@ -130,14 +130,40 @@ class TelegramNotifier:
         )
         return self.send_message(text)
 
-    def notify_deploy(self, version: str, changelog: str) -> bool:
-        """Phase 13 — announce the deployed version + what changed on (re)start."""
-        body = _md_escape(changelog).strip() if changelog else "_no changelog entry_"
+    def notify_startup(self, version: str, pairs: list[str], decide_tf: str,
+                       ctx_tfs: list[str], cycle_s: int, llm_mode: str,
+                       open_n: int) -> bool:
+        """Phase 13 — clean, modern startup card (Bahasa Indonesia, brand Vessavaṇa)."""
+        pair_s = " · ".join(pairs)
+        ctx_s = ", ".join(ctx_tfs)
         text = (
-            f"🚀 **Vaiśravaṇa deployed** `v{_md_escape(version)}`\n"
-            f"_{body}_"
+            f"🤖 **Vessavaṇa** — Bot PAPER aktif  `v{_md_escape(version)}`\n"
+            f"\n"
+            f"Pasangan  : `{pair_s}`\n"
+            f"Keputusan : setiap `{decide_tf}` — eksekusi saat candle tutup\n"
+            f"Konteks   : `{ctx_s}` (bias multi-timeframe)\n"
+            f"Siklus    : `{cycle_s} dtk`\n"
+            f"Mode      : PAPER (tanpa order live)\n"
+            f"LLM       : {_md_escape(llm_mode)}\n"
+            f"Posisi    : `{open_n}` (dimuat ulang)"
+        )
+        return self.send_message(text)
+
+    def notify_deploy(self, version: str, changelog: str) -> bool:
+        """Phase 13 — announce the deployed version + what changed (Bahasa Indonesia)."""
+        body = _md_escape(changelog).strip() if changelog else "_Belum ada catatan rilis._"
+        text = (
+            f"🚀 **Vessavaṇa `v{_md_escape(version)}` ter-deploy**\n"
+            f"\n"
+            f"Perubahan:\n"
+            f"• {body}"
         )
         return self.send_message(text)
 
     def notify_status(self, title: str, body_md: str) -> bool:
         return self.send_message(f"📊 **{_md_escape(title)}**\n\n{body_md}")
+
+    def notify_status_30m(self, lines: list[str]) -> bool:
+        """Periodic 30m status card (Bahasa Indonesia)."""
+        body = "\n".join(lines) if lines else "_Belum ada trade dieksekusi._"
+        return self.send_message(f"📊 **Vessavaṇa — Status (30m)**\n\n{body}")

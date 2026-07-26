@@ -1,5 +1,9 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.4 (2026-07-26)
+- Pesan Telegram dirombak: Bahasa Indonesia, brand Vessavaṇa, kartu startup & deploy lebih bersih & modern.
+
+
 ## v0.0.3 (2026-07-26)
 - Fix: Dockerfile now COPYs VERSION + CHANGELOG.md into image so the bot reports the real vX.Y.Z (was falling back to 0.0.0).
 

@@ -80,7 +80,7 @@ def snapshot(conn: sqlite3.Connection) -> DashboardSnapshot:
 
 
 def render(snap: DashboardSnapshot) -> str:
-    lines = ["# Vaiśravaṇa — Status", "",
+    lines = ["# Vessavaṇa — Status", "",
              f"- closed trades: {snap.total_closed} · open: {snap.total_open} "
              f"· health FAILs: {snap.incidents_24} · config v{snap.last_config_ver}",
              "",

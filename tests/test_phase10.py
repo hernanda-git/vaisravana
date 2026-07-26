@@ -48,7 +48,7 @@ def test_render_markdown(conn):
     lc = TradeLifecycle(conn)
     _trade(lc, 0)
     md = render(snapshot(conn))
-    assert "Vaiśravaṇa" in md and "BTCUSDT" in md and "100.0%" in md
+    assert "Vessavaṇa" in md and "BTCUSDT" in md and "100.0%" in md
 
 
 def test_alert_stream_promotions_and_incidents(conn):
