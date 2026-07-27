@@ -1,5 +1,22 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.33 (2026-07-28)
+Fix Telegram slash commands broken after VPS migration.
+
+- **/status (and every DB-backed command) fixed** — `db.get_connection` now opens
+  sqlite with `check_same_thread=False`. The command listener dispatches from a
+  daemon thread while `conn` is created on the main thread; on the VPS every
+  /status died with `SQLite objects created in a thread can only be used in that
+  same thread`. sqlite3.threadsafety=3 (serialized) so the shared conn is safe.
+- **/config fixed** — referenced non-existent `surface.max_concurrent_trades`
+  (pydantic AttributeError); now shows `global_max_live_pairs`.
+- **/reload fixed** — imported a `surface` module that never existed; now calls
+  `load_surface()`.
+- **tests**: `tests/test_cmd_thread_safety.py` (cross-thread conn, /config field,
+  /reload import). Fixed test pollution in `test_cmd_listener_owner_gate.py`
+  (class-level monkeypatch leaked into test_phase23_clean).
+
+
 ## v0.0.31 (2026-07-27)
 - Approve v0.0.29: PAPER-only decision audit + /decisions command (gate fix)
 
