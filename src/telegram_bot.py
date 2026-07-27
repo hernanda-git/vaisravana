@@ -388,7 +388,7 @@ class TelegramCommandListener:
         self._n = notifier
         self._on = on_command
         self._poll_s = poll_s
-        self._allowed = str(allowed_chat_id) if allowed_chat_id is not None else None
+        self._allowed = str(allowed_chat_id) if allowed_chat_id not in (None, "", "0") else None
         self._offset = 0
         self._stop = threading.Event()
         self._thread: "threading.Thread | None" = None

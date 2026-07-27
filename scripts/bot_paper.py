@@ -844,9 +844,14 @@ def run() -> None:
     from datetime import datetime, timezone
 
     # start the Telegram command listener (polls getUpdates in a daemon thread)
+    # v0.0.26: owner-only gate. allowed_chat_id defaults to None -> when
+    # NOTIFY_CHAT_ID is SET in the env, ONLY that chat's /commands are honored;
+    # everything else is ignored. This prevents a second bot (sharing the same
+    # Telegram token / update stream) from having its commands "nyampur" (mixed
+    # in) to THIS bot. SET NOTIFY_CHAT_ID to your owner chat on Fly.
     _cmd_listener = TelegramCommandListener(
         notifier, _dispatch,
-        poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID", ""),
+        poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID") or None,
     )
     _cmd_listener.start()
     log.info("Telegram /clean /stop /health listener started")
