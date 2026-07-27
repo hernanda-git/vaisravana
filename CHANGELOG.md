@@ -315,3 +315,12 @@ Repo-only commit (NO auto-deploy — human-gated cutover per plan).
 - Startup banner reports real cadence (decide=1m, ctx=5m,15m).
 - Phase 12 time-sensitive 1m decision cadence with multi-timeframe (5m/15m) context.
 - Phase 11 LLM research layer (propose-only, Sentinel-gated) — off by default.
+
+## v0.0.28 — 2026-07-27
+- Rename `/health` → `/status` as Vaisravana's primary status command (the xvalarion
+  bot owns `/health` in the shared chat). `/health` kept as a legacy alias.
+- TelegramCommandListener now supports `@username` routing: when bound to a bot username
+  (VAISRAVANA_BOT_USERNAME, default `vaisravana_bot`), it only honors commands explicitly
+  addressed to it (e.g. `/status@vaisravana_bot`) and ignores the other bot's commands
+  (e.g. `/health@xvalarion_bot`) arriving in the same chat. Plain commands still work.
+- Updated command registration (`setMyCommands`) and README.

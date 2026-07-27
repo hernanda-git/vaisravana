@@ -55,7 +55,7 @@ class TelegramNotifier:
     def register_commands(self) -> bool:
         """Register bot commands with Telegram so / shows a hint list."""
         commands = [
-            {"command": "health", "description": "Bot status, WR, open positions"},
+            {"command": "status", "description": "Bot status, WR, open positions"},
             {"command": "clean", "description": "Wipe DB, reset all state (owner only)"},
             {"command": "stop", "description": "Graceful shutdown after current cycle"},
             {"command": "positions", "description": "List open positions with PnL"},
@@ -73,7 +73,7 @@ class TelegramNotifier:
             )
             ok = r.status_code == 200 and r.json().get("ok")
             if ok:
-                self.send_message("ℹ️ Commands registered: /health /clean /stop /positions /pairs /config /exclude /include")
+                self.send_message("ℹ️ Commands registered: /status /clean /stop /positions /pairs /config /exclude /include")
             return ok
         except Exception:
             return False
@@ -384,11 +384,18 @@ class TelegramCommandListener:
 
     def __init__(self, notifier: "TelegramNotifier",
                  on_command: "callable[[str, str], None]",
-                 poll_s: int = 2, allowed_chat_id: "str | int | None" = None) -> None:
+                 poll_s: int = 2, allowed_chat_id: "str | int | None" = None,
+                 bot_username: "str | None" = None) -> None:
         self._n = notifier
         self._on = on_command
         self._poll_s = poll_s
         self._allowed = str(allowed_chat_id) if allowed_chat_id not in (None, "", "0") else None
+        # v0.0.28: when set, only commands explicitly suffixed with
+        # @<bot_username> are honored (e.g. /status@vaisravana_bot). This stops
+        # a second bot in the SAME chat (different token) from having its
+        # commands "nyampur" into this one. Plain commands (no @) are still
+        # accepted for backward-compat single-bot setups.
+        self._bot_username = bot_username.lstrip("@").lower() if bot_username else None
         self._offset = 0
         self._stop = threading.Event()
         self._thread: "threading.Thread | None" = None
@@ -431,8 +438,19 @@ class TelegramCommandListener:
             if self._allowed is not None and str(chat_id) != self._allowed:
                 continue  # ignore commands from other chats
             text = (msg.get("text") or "").strip()
-            if text.startswith("/"):
-                try:
-                    self._on(text, text)
-                except Exception as e:
-                    log.exception("tg command handler error: %s", e)
+            if not text.startswith("/"):
+                continue
+            # v0.0.28: @username routing. If this listener is bound to a bot
+            # username, honor ONLY commands explicitly addressed to it
+            # (e.g. /status@vaisravana_bot). Plain commands (no @) are also
+            # accepted so single-bot usage keeps working. A command addressed
+            # to a DIFFERENT bot (e.g. /health@xvalarion_bot) is ignored so the
+            # two bots in the same chat stop cross-talking.
+            head = text.split()[0].lower()
+            target = head.split("@", 1)[1] if "@" in head else None
+            if target is not None and self._bot_username is not None and target != self._bot_username:
+                continue
+            try:
+                self._on(text, text)
+            except Exception as e:
+                log.exception("tg command handler error: %s", e)

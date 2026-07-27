@@ -57,8 +57,8 @@ Send these to the bot from the owner chat (`NOTIFY_CHAT_ID`):
 
 | Command | Effect |
 |---|---|
-| `/stop` | Graceful halt — loop exits at end of cycle, 🛑 card sent. Durable stop via `flyctl machine stop`. |
-| `/health` | Full status: overall WR + expectancy + PnL, by-side/by-tf/by-pair breakdown, open/closed counts, last 8 trades. |
+| `/status` | Full status: overall WR + expectancy + PnL, by-side/by-tf/by-pair breakdown, open/closed counts, last 8 trades. (Vaisravana-only command; use `/status@vaisravana_bot`.) |
+| `/health` | Legacy alias of `/status` (kept for back-compat; the xvalarion bot owns `/health` in the shared chat). |
 | `/clean` | Wipe DB + clear all cooldown/kill/loss state → fresh start (blank WR, no positions). |
 
 Unknown commands are ignored. Non-owner chats are ignored.

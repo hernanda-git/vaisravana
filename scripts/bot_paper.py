@@ -754,7 +754,10 @@ def run() -> None:
             clean_state()
         elif cmd == "/stop":
             stop_bot()
+        elif cmd == "/status":
+            health_report()
         elif cmd == "/health":
+            # legacy alias; the other bot (xvalarion) owns /health now.
             health_report()
         elif cmd == "/positions":
             _send_positions()
@@ -854,14 +857,21 @@ def run() -> None:
     # other bot eats your /commands). Set VAISRAVANA_CMD_LISTEN=0 to make
     # THIS bot stop polling entirely and leave the other bot as the sole handler.
     _cmd_listen = os.getenv("VAISRAVANA_CMD_LISTEN", "1") not in ("0", "false", "no")
+    # v0.0.28: bind the listener to THIS bot's username so it only honors
+    # commands explicitly addressed to it (e.g. /status@vaisravana_bot) and
+    # ignores the other bot's commands (e.g. /health@xvalarion_bot) that
+    # arrive in the same shared chat. Plain (un-suffixed) commands are still
+    # accepted for single-bot convenience.
+    _bot_username = os.getenv("VAISRAVANA_BOT_USERNAME", "vaisravana_bot")
     _cmd_listener = None
     if _cmd_listen:
         _cmd_listener = TelegramCommandListener(
             notifier, _dispatch,
             poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID") or None,
+            bot_username=_bot_username,
         )
         _cmd_listener.start()
-        log.info("Telegram /clean /stop /health listener started")
+        log.info("Telegram /status /clean /stop listener started (Vaisravana-only; /health reserved for xvalarion)")
     else:
         log.info("Telegram command listener DISABLED (VAISRAVANA_CMD_LISTEN=0) "
                   "- another bot owns the shared token's getUpdates stream")
