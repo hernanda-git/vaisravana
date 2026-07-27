@@ -908,7 +908,7 @@ def run() -> None:
                     if monitor is not None:
                         for pos in monitor.positions.values():
                             if pos.correlation_id == trade.correlation_id:
-                                pos.sl = new_sl
+                                pos.sl.stop_price = new_sl
                                 break
                     trade.sl_price = new_sl
                     log.debug("trailing SL %s %s moved to BE (R=%.2f)", sym, side_, unrealized_r)
@@ -917,7 +917,7 @@ def run() -> None:
                     if monitor is not None:
                         for pos in monitor.positions.values():
                             if pos.correlation_id == trade.correlation_id:
-                                pos.sl = new_sl
+                                pos.sl.stop_price = new_sl
                                 break
                     trade.sl_price = new_sl
                     log.debug("trailing SL %s %s moved to BE (R=%.2f)", sym, side_, unrealized_r)
