@@ -1,5 +1,18 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.26 (2026-07-27) — Fix kill-switch Telegram spam + fresh/clean deploy
+Repo commit (PAPER). Live PAPER machine stopped, /data wiped, redeployed fresh.
+
+- **Kill-switch alert de-duplication** (`src/safety.py` `KillSwitch.alert_due()`):
+  the switch is checked every tick, so a tripped switch was spamming the Telegram
+  channel with identical "KILL-SWITCH TRIPPED / DAILY_DD: 11.4% >= 0.5%"
+  cards every loop (see spammy.txt: 31+ identical messages in ~2 min). Now the alert
+  fires ONCE per trip, then at most every 30 min while still tripped. The halt
+  itself still applies every tick (safety unchanged). Bot gates `notify_kill_switch`
+  on `alert_due()`.
+- Tests: `test_killswitch_alert_dedupe.py` (once-per-trip, not-due-when-clean,
+  fresh-trip-resets-timer).
+
 ## v0.0.25 (2026-07-27) — Robustness P1+P2: walk-forward + stat gate + vol sizing + self-loop + cutover
 Repo-only commit (NO auto-deploy — human-gated cutover per plan).
 

@@ -52,6 +52,10 @@ class KillSwitch:
     reason: str = ""
     _cooldowns: dict[tuple, float] = field(default_factory=dict)
     _streaks: dict[tuple, int] = field(default_factory=dict)
+    # v0.0.25: alert de-duplication — the kill-switch is checked every tick, so a
+    # tripped switch must alert ONCE per trip, not spam every loop (see spammy.txt).
+    _last_alert_ts: float = field(default_factory=lambda: -1e18)  # far past -> first trip always alerts
+    _alert_interval_s: float = 30 * 60  # re-alert at most every 30 min while tripped
 
     def check_global(
         self,
@@ -74,14 +78,32 @@ class KillSwitch:
             self._trip("DELIST")
         return self.tripped, self.reason
 
+    def alert_due(self) -> bool:
+        """True at most once per trip, then at most every _alert_interval_s while
+        still tripped. Caller uses this to gate notify_kill_switch()."""
+        if not self.tripped:
+            return False
+        now = self.clock()
+        if now - self._last_alert_ts >= self._alert_interval_s:
+            self._last_alert_ts = now
+            return True
+        return False
+
     def _trip(self, reason: str) -> None:
+        newly = not self.tripped
         self.tripped = True
         self.reason = reason
+        if newly:
+            # clear the alert timer on a FRESH trip so the first alert always
+            # fires (far-past sentinel; do NOT reset to 0.0 — that would
+            # suppress the first alert when the clock is already > 0).
+            self._last_alert_ts = -1e18
 
     def reset(self) -> None:
         """Manual/next-day reset (human or day-roll)."""
         self.tripped = False
         self.reason = ""
+        self._last_alert_ts = 0.0
 
     # --- per (pair, tf, side) losing streak (doc 30 §7) ---
 

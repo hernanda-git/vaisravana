@@ -1205,7 +1205,11 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                                                  adl_rank=1, feed_frozen=feed_frozen)
             if tripped:
                 tel.health("kill_switch", "FAIL", detail=kreason)
-                notifier.notify_kill_switch(kreason)
+                # v0.0.25: de-dupe — alert ONCE per trip (then at most every 30m
+                # while still tripped). Prevents the kill-switch spamming the
+                # channel every tick. The halt itself still applies every tick.
+                if kill.alert_due():
+                    notifier.notify_kill_switch(kreason)
                 return
 
         # decide under THIS strategy's profile (own entry bar + SL/TP mults)
