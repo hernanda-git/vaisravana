@@ -64,6 +64,7 @@ class TelegramNotifier:
             {"command": "exclude", "description": "[PAIR] Remove a pair from trading"},
             {"command": "include", "description": "[PAIR] Re-add a pair to trading"},
             {"command": "reload", "description": "Reload config from disk"},
+            {"command": "decisions", "description": "Show recent GATED/near-threshold decisions (from DB)"},
         ]
         try:
             r = httpx.post(
@@ -73,7 +74,7 @@ class TelegramNotifier:
             )
             ok = r.status_code == 200 and r.json().get("ok")
             if ok:
-                self.send_message("ℹ️ Commands registered: /status /clean /stop /positions /pairs /config /exclude /include")
+                self.send_message("ℹ️ Commands registered: /status /clean /stop /positions /pairs /config /exclude /include /decisions")
             return ok
         except Exception:
             return False

@@ -539,8 +539,8 @@ def _persist_decisions_log(conn, pair, tf, state, se, decision, reason=None):
         conn.execute(
             "INSERT INTO decisions_log "
             "(id, correlation_id, ts, pair, tf, regime, scores_json, total_score, "
-            "confidence_pct, decision, gate_a_pass, gate_b_pass, reason, config_ver) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "confidence_pct, decision, gate_a_pass, gate_b_pass, reason, config_ver, side) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (f"{pair}-{tf}-{int(time.time()*1000)}-{getattr(se,'side','')}",
              f"{pair}-{tf}",
              datetime.now(timezone.utc).isoformat(),
@@ -550,7 +550,8 @@ def _persist_decisions_log(conn, pair, tf, state, se, decision, reason=None):
              getattr(se, "chosen_score", None),
              getattr(se, "confidence_pct", None),
              decision, 1, 1, reason,
-             vmod.read_version()),
+             vmod.read_version(),
+             getattr(se, "side", None)),
         )
         conn.commit()
     except Exception as e:  # never let a log write break the loop
@@ -779,7 +780,39 @@ def run() -> None:
                 notifier.send_message("✅ Config reloaded from disk")
             except Exception as e:
                 notifier.send_message(f"❌ Reload failed: {e}")
+        elif cmd == "/decisions":
+            try:
+                n = int(args[0]) if args and args[0].isdigit() else 25
+            except ValueError:
+                n = 25
+            _send_decisions(n)
         # unknown commands are ignored
+
+    def _send_decisions(limit: int = 25) -> None:
+        """Owner /decisions: pull recent GATED/WATCH/SKIP rows from decisions_log (DB-only audit)."""
+        try:
+            rows = conn.execute(
+                "SELECT pair, tf, side, decision, total_score, reason "
+                "FROM decisions_log "
+                "WHERE decision IN ('GATED','WATCH','SKIP') "
+                "ORDER BY ts DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        except Exception as e:
+            notifier.send_message(f"❌ /decisions query failed: {e}")
+            return
+        if not rows:
+            notifier.send_message("📭 No decisions logged in the last 7d.")
+            return
+        tf_profile = {"1m": "scalping", "15m": "day", "1h": "swing"}
+        lines = [f"👁 <b>Decisions</b> (last {len(rows)} from DB)"]
+        for r in rows[:25]:
+            p = r["pair"]; tf = r["tf"]; side = r["side"] or "—"
+            dec = r["decision"]; score = r["total_score"]; reason = r["reason"]
+            strat = tf_profile.get(tf, tf)
+            why = f" — {reason}" if reason else ""
+            lines.append(f"• <code>{p} {tf}</code> {side} [{strat}] {dec} {score}{why}")
+        notifier.send_message("\n".join(lines))
 
     def _send_positions() -> None:
         """Send list of open positions."""
@@ -990,17 +1023,9 @@ def run() -> None:
             for k in list(cooldowns.keys()):
                 if k not in expired:
                     cooldowns[k] -= 1
-            # v0.0.16: flush the batched WATCH/SUPPRESS decision card (1 per cycle, not 45).
-            if cycle_decisions:
-                lines = []
-                for (p, tf, strat, side, score, thr) in cycle_decisions[:25]:
-                    tag = f"score {score}≥{thr}" if thr != "SUPPRESSED" else "SUPPRESSED"
-                    lines.append(f"• <code>{p} {tf}</code> {side} [{strat}] {tag}")
-                more = "" if len(cycle_decisions) <= 25 else \
-                    f"\n… +{len(cycle_decisions) - 25} more"
-                notifier.send_message(
-                    f"👁 <b>Decisions</b> ({len(cycle_decisions)} near-threshold/"
-                    f"suppressed)\n" + "\n".join(lines) + more)
+            # v0.0.29: decision audit is DB-only — the per-cycle 👁 card is disabled to stop
+            # spam. Pull the recent GATED/near-threshold rows on demand with /decisions.
+            # `cycle_decisions` is still collected as the decision_sink audit trail (not sent).
             # periodic status every ~30 min
             if time.time() - last_status > 1800:
                 _report_status(conn, notifier)

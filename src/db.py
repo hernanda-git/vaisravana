@@ -134,6 +134,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE trade_logs ADD COLUMN fees_usd REAL")
     except sqlite3.OperationalError:
         pass  # already present
+    # v0.0.29: add `side` to decisions_log so /decisions can show BUY/SELL without
+    # re-parsing scores_json.
+    try:
+        conn.execute("ALTER TABLE decisions_log ADD COLUMN side TEXT")
+    except sqlite3.OperationalError:
+        pass  # already present
 
 
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -229,7 +235,7 @@ def db_stats(conn: sqlite3.Connection, db_path: str | Path | None = None) -> dic
 # highest-write table in the system (≈15 pairs × 3 strategies × 60s ≈ 65k rows/day).
 # Trade/execution logs are kept indefinitely (they drive evaluation + promotion), but
 # the decision audit trail is only useful for recent diagnostics, so it is pruned.
-DECISIONS_LOG_RETENTION_DAYS = 1
+DECISIONS_LOG_RETENTION_DAYS = 7  # v0.0.29: keep 7d so /decisions has useful history
 
 
 def purge_old_decisions(
