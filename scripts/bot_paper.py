@@ -580,6 +580,9 @@ def run() -> None:
     ver = vmod.read_version()
     registry = SymbolRegistry()
     feed = FeedHealth(max_age_s=max(30.0, CYCLE_S * 1.5))
+
+    # v0.0.21: register bot commands so / shows a hint list in Telegram
+    notifier.register_commands()
     # --- HARD mode boundary (doc 30 §6/§7): structurally impossible to trade live
     # without human approval. PAPER (default) only ever drives a simulated exchange.
     mode = os.getenv("VAISRAVANA_MODE", "paper").lower()
