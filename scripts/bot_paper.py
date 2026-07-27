@@ -59,7 +59,7 @@ log = logging.getLogger("vaisravana.bot")
 
 PAIRS = os.getenv("VAISRAVANA_PAIRS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
-# v0.1.0: monitored universe defaults to the 15-pair mix (leaders + 12 requested alts).
+# v0.0.10: monitored universe defaults to the 15-pair mix (leaders + 12 requested alts).
 # Resolved through symbols.resolve_symbol() so "PEPE"/"BONK" map to their 1000x contract.
 PAIRS = [resolve_symbol(p) for p in
          os.getenv("VAISRAVANA_PAIRS", ",".join(DEFAULT_UNIVERSE)).split(",") if p]
@@ -70,21 +70,21 @@ FETCH_LIMIT = int(os.getenv("VAISRAVANA_KLINES", "600"))
 CYCLE_S = int(os.getenv("VAISRAVANA_CYCLE_S", "60"))  # 60s = one decision per minute
 DB_PATH = os.getenv("VAISRAVANA_DB", "/data/vaisravana.db")
 SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", "/data/surface.json")
-# v0.1.6: caretaker cron state file (deploy cooldown + excluded pairs). `/clean` removes
+# v0.0.16: caretaker cron state file (deploy cooldown + excluded pairs). `/clean` removes
 # it so the caretaker may re-tune immediately after a fresh start.
 CRON_STATE_PATH = Path(__file__).resolve().parent.parent / ".vaisravana_cron_state.json"
 
-# v0.1.8: expectancy-first side gate (expectancy-driven, NOT an 85% WR gate).
+# v0.0.18: expectancy-first side gate (expectancy-driven, NOT an 85% WR gate).
 SIDE_EXP_MIN_SAMPLES = int(os.getenv("VAISRAVANA_SIDE_MIN_SAMPLES", "20"))
 SIDE_EXP_FLOOR_R = float(os.getenv("VAISRAVANA_SIDE_EXP_FLOOR", "-0.05"))
 
 
 def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
-    """v0.1.8 entry gate — the core WR fix.
+    """v0.0.18 entry gate — the core WR fix.
 
     A trade may open only if ALL hold:
       1. Side not bleeding: a side with >= MIN_SAMPLES and negative expectancy is blocked
-         (stops a side after it proves unprofitable — v0.1.6 idea, kept).
+         (stops a side after it proves unprofitable — v0.0.16 idea, kept).
       2. Directional regime filter: BUY only in a bullish regime (htf_bias/btc_bias/
          risk_regime); SELL only when NOT bullish. Long-biasing into a downtrend is the
          single biggest WR killer (BUY was 23.7% WR / -8.78R live).
@@ -114,7 +114,7 @@ def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
 #                  making the existing 7-factor engine multi-timeframe WITHOUT engine edits.
 DECISION_TF = os.getenv("VAISRAVANA_DECISION_TF", "1m")
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
-# v0.1.0: concurrent multi-strategy. The default scalping DECISION_TF (1m) drives the
+# v0.0.10: concurrent multi-strategy. The default scalping DECISION_TF (1m) drives the
 # scalping profile; Day=15m and Swing=1h profiles run in parallel. Each strategy's own
 # decision_tf is taken from its StrategyProfile, NOT this global, so the three horizons
 # are genuinely independent (and the (pair, decision_tf, side) key keeps them apart).
@@ -358,7 +358,7 @@ def run() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     conn = init_db(DB_PATH)
-    # v0.1.0: on boot, immediately trim decisions_log older than 1 day so a long-lived
+    # v0.0.10: on boot, immediately trim decisions_log older than 1 day so a long-lived
     # or restarted bot never lets the spammy audit table grow unbounded.
     try:
         db.purge_old_decisions(conn)
@@ -426,11 +426,11 @@ def run() -> None:
         log.warning("VAISRAVANA_LLM=%s but ZEN_API_KEY unset — research disabled", LLM_MODE)
 
     last_status = 0.0
-    # v0.1.0: the unique decision timeframes actually used by active strategies, so we
+    # v0.0.10: the unique decision timeframes actually used by active strategies, so we
     # fetch each only once per pair per cycle (scalp=1m, day=15m, swing=1h default).
     decision_tfs = sorted({p.decision_tf for p in ACTIVE_PROFILES}, key=_tf_minutes)
 
-    # v0.1.6 /owner: `/clean` slash command — wipe DB + clear ALL cooldown/loss/kill state
+    # v0.0.16 /owner: `/clean` slash command — wipe DB + clear ALL cooldown/loss/kill state
     # and start the trading loop fresh (blank win rate, no open positions). Defined as a
     # closure so it captures every live state holder. Owner-only (chat-gated in the listener).
     control = {"stop": False}
@@ -520,7 +520,7 @@ def run() -> None:
             if realized_loss_today["day"] != today:
                 realized_loss_today = {"usd": 0.0, "day": today}
                 kill.reset()  # fresh day -> clear any tripped kill-switch
-                # v0.1.0: prune the spammy decisions_log (>1 day old) at the daily roll
+                # v0.0.10: prune the spammy decisions_log (>1 day old) at the daily roll
                 try:
                     deleted = db.purge_old_decisions(conn)
                     if deleted:
@@ -535,9 +535,9 @@ def run() -> None:
                 for tf in decision_tfs + TFS:
                     feed.mark(pair, tf, int(time.time() * 1000))
             feed_frozen = bool(feed.frozen_list(PAIRS, decision_tfs + TFS))
-            cycle_decisions: list = []  # v0.1.6: batch WATCH/SUPPRESS cards into 1/cycle
+            cycle_decisions: list = []  # v0.0.16: batch WATCH/SUPPRESS cards into 1/cycle
             for pair in PAIRS:
-                # v0.1.0: fetch all decision TFs + structural contexts ONCE per pair,
+                # v0.0.10: fetch all decision TFs + structural contexts ONCE per pair,
                 # cache them, and hand the cache to _decide_tick so each strategy reads
                 # its own decision_tf without re-fetching.
                 klines_cache: dict[str, list] = {}
@@ -572,7 +572,7 @@ def run() -> None:
                                side=ev.side, price=ev.price, status=ev.reason)
                 notifier.notify_close(ev.symbol, DECISION_TF, ev.side, ev.price,
                                       ev.reason, res["r_multiple"], bool(res["win"]))
-            # v0.1.6: flush the batched WATCH/SUPPRESS decision card (1 per cycle, not 45).
+            # v0.0.16: flush the batched WATCH/SUPPRESS decision card (1 per cycle, not 45).
             if cycle_decisions:
                 lines = []
                 for (p, tf, strat, side, score, thr) in cycle_decisions[:25]:
@@ -731,7 +731,7 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
     appended for a single batched per-cycle card instead of one Telegram message per
     pair×strategy per tick (prevents the WATCH spam).
     """
-    # v0.1.6: suppress ENTRY on a side that is systematically bleeding. BUY was running
+    # v0.0.16: suppress ENTRY on a side that is systematically bleeding. BUY was running
     # at ~16% WR / -14R while SELL was positive — so we block the losing side until its
     # recent expectancy recovers. This is expectancy-driven, not an arbitrary 85% gate.
     SIDE_EXP_MIN_SAMPLES = int(os.getenv("VAISRAVANA_SIDE_MIN_SAMPLES", "20"))
@@ -794,7 +794,7 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                                atr=(dec[i].c * state.atr_pct), surface=surface)
         if se.decision != "ENTRY":
             if se.decision == "WATCH":
-                # v0.1.6: batch WATCHs into ONE per-cycle card (no spam). Only keep
+                # v0.0.16: batch WATCHs into ONE per-cycle card (no spam). Only keep
                 # near-threshold rows (within 0.06 of the bar) — they're the informative ones.
                 if decision_sink is not None and se.chosen_score >= profile.entry_threshold - 0.06:
                     decision_sink.append(
@@ -803,12 +803,12 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                 elif decision_sink is None:
                     notifier.notify_decision(pair, dtf, "WATCH", se.chosen_score,
                                              se.side, f"{profile.name} below threshold")
-            # v0.1.7: persist every evaluated decision (WATCH or SKIP) to decisions_log
+            # v0.0.17: persist every evaluated decision (WATCH or SKIP) to decisions_log
             _persist_decisions_log(conn, pair, dtf, state, se, se.decision)
             continue
 
-        # v0.1.8: directional + expectancy entry gate (the core WR fix). Replaces the
-        # weaker v0.1.6 side-bleed gate with a full regime + pullback filter.
+        # v0.0.18: directional + expectancy entry gate (the core WR fix). Replaces the
+        # weaker v0.0.16 side-bleed gate with a full regime + pullback filter.
         sc, sexp = lc.side_expectancy(se.side)
         allowed, reason = entry_allowed(state, se.side, sc, sexp)
         if not allowed:
@@ -818,11 +818,11 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             else:
                 notifier.notify_decision(pair, dtf, "SKIP", se.chosen_score,
                                          se.side, reason)
-            # v0.1.7: persist the GATED decision so the audit trail is complete
+            # v0.0.17: persist the GATED decision so the audit trail is complete
             _persist_decisions_log(conn, pair, dtf, state, se, "GATED", reason=reason)
             continue
 
-        # v0.1.7: persist ENTRY decision to decisions_log
+        # v0.0.17: persist ENTRY decision to decisions_log
         _persist_decisions_log(conn, pair, dtf, state, se, "ENTRY")
 
         corr_id = f"{pair}-{dtf}-{int(time.time()*1000)}-{se.side}"

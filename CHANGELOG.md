@@ -1,36 +1,36 @@
 # Changelog — Project Vaiśravaṇa
 
-## v0.1.8 (2026-07-26) — Directional + expectancy entry gate (the WR fix)
+## v0.0.18 (2026-07-26) — Directional + expectancy entry gate (the WR fix)
 - **Core win-rate fix** (eval showed 36.7% WR / −1.75R; BUY was 23.7% / −8.78R):
   - New `entry_allowed(state, side, sc, sexp)` gate (pure + TDD, 7 tests):
     1. **Side-bleed block** — a side with ≥20 samples and negative expectancy is blocked
-       (keeps the v0.1.6 idea, re-expressed as a single gate).
+       (keeps the v0.0.16 idea, re-expressed as a single gate).
     2. **Directional regime filter** — BUY only in a bullish regime (htf_bias/btc_bias/
        risk_regime); SELL only when NOT bullish. Kills the long-bias-into-downtrend bleed.
     3. **Pullback confirmation** in a neutral regime — no chasing extremes without a
        `pullback_to_anchor`.
-  - Replaces the weaker v0.1.6 side-bleed gate in `_decide_tick`; gated decisions are
+  - Replaces the weaker v0.0.16 side-bleed gate in `_decide_tick`; gated decisions are
     persisted to `decisions_log` as `GATED` (audit trail complete).
 - **Evaluation** written to `docs/EVALUATION.md` (full live-DB breakdown + root-cause +
   improvement plan). Bot stopped (machine `78475e3ce4dd58` halted); caretaker cron removed
   itself after committing the eval doc.
 - **+7 tests** (tests/test_phase25_entry_gate.py) → 211 passing.
 
-## v0.1.7 (2026-07-26) — Telegram `/stop` + `/health` commands + decisions_log persistence
+## v0.0.17 (2026-07-26) — Telegram `/stop` + `/health` commands + decisions_log persistence
 - **Owner slash commands (owner ask):**
   - `/stop` — graceful halt: sets a control flag, the main loop exits at end of the
     current cycle, sends a 🛑 confirmation card. Durable stop via `flyctl machine stop`.
   - `/health` — full status card: overall WR + expectancy + PnL, by-side / by-tf / by-pair
     breakdown (worst/best pairs), open/closed counts, DB size, and last 8 trades.
-  - `/clean` — retained (v0.1.6): wipe DB + clear all cooldown/kill/loss state, fresh start.
+  - `/clean` — retained (v0.0.16): wipe DB + clear all cooldown/kill/loss state, fresh start.
   - Dispatched via the existing `TelegramCommandListener` (chat-gated, daemon thread).
 - **decisions_log persistence fix:** `_decide_tick` now writes every evaluated decision
   (WATCH/SKIP/SUPPRESSED/ENTRY) to `decisions_log` (the caretaker noted it was empty since
-  the v0.1.0 multi-strategy rewrite). `_persist_decisions_log` added; serializes scores
+  the v0.0.10 multi-strategy rewrite). `_persist_decisions_log` added; serializes scores
   safely (as_dict / str fallback) so a non-JSON-able sub_scores object can't break the loop.
 - **+4 tests** (tests/test_phase24_stop_health.py) → 204 passing.
 
-## v0.1.6 (2026-07-26) — `/clean` slash command (wipe + fresh start)
+## v0.0.16 (2026-07-26) — `/clean` slash command (wipe + fresh start)
 - **Owner slash command `/clean`** (owner ask). The bot was send-only; added a
   `TelegramCommandListener` (daemon thread, `getUpdates` poll, chat-gated to NOTIFY_CHAT_ID)
   that dispatches `/clean`. On `/clean` the bot:
@@ -44,7 +44,7 @@
   Sends a 🧼 confirmation card. Safe: PAPER-only, owner-chat-gated, no live path touched.
 - **+6 tests** (tests/test_phase23_clean.py) → 199 passing.
 
-## v0.1.5 (2026-07-26) — losing-side expectancy gate + WATCH spam fix
+## v0.0.15 (2026-07-26) — losing-side expectancy gate + WATCH spam fix
 - **Losing-side gate (owner ask: WR 26% + spam).** `TradeLifecycle.side_expectancy(side)`
   returns rolling ΣR over last-30 closed trades per side. `_decide_tick` now SUPPRESSES
   ENTRY on a side whose recent expectancy is negative (≥20 samples, floor −0.05R). The
@@ -57,25 +57,25 @@
   are unchanged (they're meaningful).
 - **+4 tests** (tests/test_phase22_sidegate.py) → 193 passing.
 
-## v0.1.4 (2026-07-26) — fix loss_book NameError in close handler
+## v0.0.14 (2026-07-26) — fix loss_book NameError in close handler
 - **BUG FIX:** `loss_book → realized_loss_today` in `run()` close handler (line 401-402).
   The close handler referenced `loss_book` which was only a parameter name in `_decide_tick`,
   not defined in `run()` scope → `NameError: name 'loss_book' is not defined` every time
   a trade closed at a loss. Now correctly uses the `realized_loss_today` dict.
 - **TEST:** 3 new tests for `_close()` — loss accumulation, win not debited, None-safe.
 
-## v0.1.3 (2026-07-26) — fix CloseEvent missing tf+side (loop error)
+## v0.0.13 (2026-07-26) — fix CloseEvent missing tf+side (loop error)
 - **BUG FIX:** PositionMonitor CloseEvent init was missing `tf` and `side` fields,
   causing a recurring `AttributeError` every time a SL/TP was hit in PAPER mode.
   The rest of the loop expected `ev.tf` and `ev.side` to exist when looking up
   the open_trades key. Fixed by including both in the event.
 
-## v0.1.2 (2026-07-26) — test health_clean coverage
+## v0.0.12 (2026-07-26) — test health_clean coverage
 - **COVERAGE:** 5 new unit tests for `health_clean()` — empty list, PASS-only,
   FAIL-only, outside-window, mixed — ensuring the kill-switch auto-reset path is
   regression-safe.
 
-## v0.1.1 (2026-07-26) — decisions_log 1-day auto-prune
+## v0.0.11 (2026-07-26) — decisions_log 1-day auto-prune
 - **DB auto-prune (owner ask):** `decisions_log` (the most-spammed table — one row per
   pair×strategy per 60s tick, ~65k rows/day) is now pruned of rows older than 1 day.
   - `db.purge_old_decisions()` deletes via `datetime(ts) < datetime('now','-1 days')`
@@ -86,7 +86,7 @@
     evaluation + promotion, so only the decision audit trail is pruned.
 - **+4 tests** (tests/test_phase21_prune.py) → 180 passing.
 
-## v0.1.0 (2026-07-26) — ACTIVE MULTI-STRATEGY OVERHAUL
+## v0.0.10 (2026-07-26) — ACTIVE MULTI-STRATEGY OVERHAUL
 - **Win-rate target rationalized (owner ask):** 85% gate was irrational/silent → replaced
   with an EXPECTANCY-FIRST promotion gate. WR is now a *floor* (56%, above the taker
   break-even of ~48% at R:R≥1.5), not a target. A 90% WR / negative-expectancy (fee-bleed)
@@ -177,14 +177,11 @@
 ## v0.0.4 (2026-07-26)
 - Pesan Telegram dirombak: Bahasa Indonesia, brand Vessavaṇa, kartu startup & deploy lebih bersih & modern.
 
-
 ## v0.0.3 (2026-07-26)
 - Fix: Dockerfile now COPYs VERSION + CHANGELOG.md into image so the bot reports the real vX.Y.Z (was falling back to 0.0.0).
 
-
 ## v0.0.2 (2026-07-26)
 - Phase 13 versioning: VERSION file + git tag v0.0.x per deploy; bot announces vX.Y.Z + changelog on startup via Telegram; fly.toml aligned to 1m cadence.
-
 
 ## v0.0.1
 - Versioning system introduced: repo-root VERSION file + git tag `v0.0.xxx` per deploy.

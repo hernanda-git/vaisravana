@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vaisravana"
-version = "0.1.0"
+version = "0.0.18"
 description = "Project Vaiśravaṇa — stability-first, high-WR crypto-futures trading system (documentation-complete design)."
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.0"]

@@ -1,1 +1,1 @@
-{"last_deploy_ts": 1785107603, "last_improvement": "v0.1.6: /clean slash command + side-bleed gate", "consecutive_healthy": 3, "last_change_tick": 6, "excluded_pairs": []}
+{"last_deploy_ts": 1785116954, "last_improvement": "v0.1.7: decisions_log persistence (already deployed), caretaker cleanup", "consecutive_healthy": 0, "last_change_tick": 7, "excluded_pairs": []}

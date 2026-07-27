@@ -4,8 +4,8 @@
 > owner-controlled. Named for the Buddhist deity of wealth (and the northern guardian-king
 > who *listens* — fitting, since this bot is driven by owner Telegram commands).
 
-**Status (2026-07-26):** v0.1.8 — bot **stopped** (machine halted) while improvements land.
-211 tests green. Live eval showed a 36.7% WR / −1.75R; the v0.1.8 directional+expectancy
+**Status (2026-07-26):** v0.0.18 — bot **stopped** (machine halted) while improvements land.
+211 tests green. Live eval showed a 36.7% WR / −1.75R; the v0.0.18 directional+expectancy
 gate is the fix (see `docs/EVALUATION.md`).
 
 ---
@@ -40,7 +40,7 @@ src/symbols.py              DEFAULT_UNIVERSE (15 pairs) + resolve_symbol()
 | Day | 15m | ≤4h | structural bias, 1h+4h context |
 | Swing | 1h | ≤2d | trend, 4h+1d context |
 
-### Entry gate (v0.1.8 — the WR fix)
+### Entry gate (v0.0.18 — the WR fix)
 `entry_allowed(state, side, sc, sexp)` must pass for any ENTRY:
 1. **Side not bleeding** — ≥20 samples & negative expectancy ⇒ blocked.
 2. **Directional regime filter** — BUY only in bullish regime; SELL only when not bullish.
