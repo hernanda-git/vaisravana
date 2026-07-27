@@ -67,10 +67,13 @@ def main() -> None:
     try:
         import sqlite3 as _sqlite
         from cutover_gate import CutoverGate
+        import db as _db
         # production DB is /data/vaisravana.db on Fly; allow local override.
         db_path = ROOT / "vaisravana.db"
         live_db = "/data/vaisravana.db"
-        conn = _sqlite.connect(live_db if Path(live_db).exists() else db_path)
+        # Connect through db.init_db so the connection gets row_factory=sqlite3.Row
+        # (CutoverGate.state() indexes rows by string key) + migrations run.
+        conn = _db.init_db(live_db if Path(live_db).exists() else db_path)
         gate = CutoverGate(conn)
         if not gate.can_deploy():
             conn.close()
