@@ -11,8 +11,9 @@ from config import ParameterSurface, Weights  # noqa: E402
 def test_default_surface_is_valid():
     s = ParameterSurface()
     assert s.entry_threshold == 0.60
-    assert s.tp_atr_mult == 1.5
+    assert s.tp_atr_mult == 2.0  # v0.0.23 T1: R:R 2:1 floor
     assert s.sl_atr_mult == 1.0
+    assert s.rr >= 2.0
     assert s.max_leverage == 3
     assert s.daily_loss_limit_pct == 0.5
     assert s.risk_per_trade_pct == 0.25

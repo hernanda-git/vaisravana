@@ -132,7 +132,7 @@ class ParameterSurface(BaseModel):
     watch_threshold: float = Field(default=0.52, ge=0.40, le=0.85)
 
     sl_atr_mult: float = Field(default=1.0, ge=0.8, le=3.0)
-    tp_atr_mult: float = Field(default=1.5, ge=1.0, le=6.0)
+    tp_atr_mult: float = Field(default=2.0, ge=1.0, le=6.0)  # v0.0.23 T1: R:R 2:1 (was 1.5)
 
     max_leverage: int = Field(default=3, ge=1, le=3)
     cooldown_after_loss: int = Field(default=5, ge=0, le=60)
@@ -148,12 +148,39 @@ class ParameterSurface(BaseModel):
     min_trades_for_promote: int = Field(default=100, ge=30, le=500)
     global_max_live_pairs: int = Field(default=5, ge=1, le=20)
 
+    @property
+    def rr(self) -> float:
+        """Reward:risk ratio (tp/sl) for the active PAPER surface.
+
+        v0.0.23: used by the R:R >= 2:1 owner-floor validator.
+        """
+        return self.tp_atr_mult / self.sl_atr_mult if self.sl_atr_mult else 0.0
+
     @model_validator(mode="after")
     def _watch_below_entry(self) -> "ParameterSurface":
         if self.watch_threshold >= self.entry_threshold:
             raise ValueError(
                 f"watch_threshold ({self.watch_threshold}) must be < "
                 f"entry_threshold ({self.entry_threshold})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _rr_floor(self) -> "ParameterSurface":
+        """v0.0.23 T1: HARD owner floor R:R >= 2:1.
+
+        Owner mandate: "1 win recovers 2 losses is OK, but I don't want
+        to lose money." Translated: tp_atr_mult / sl_atr_mult >= 2.0,
+        i.e. break-even WR = 1/(1+2) = 33.3%. Below this the bot
+        can lose money structurally, so any surface below 2:1 is rejected
+        at construction time — the floor is enforced in code, not by hope.
+        """
+        rr = self.rr
+        if rr < 2.0 - 1e-9:
+            raise ValueError(
+                f"R:R {rr:.3f} is below the owner floor of 2:1 "
+                f"(tp_atr_mult={self.tp_atr_mult} / sl_atr_mult="
+                f"{self.sl_atr_mult}). 1 win must recover >=2 losses."
             )
         return self
 
