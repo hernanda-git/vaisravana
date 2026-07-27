@@ -1309,6 +1309,14 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         # --- hard live boundary: in LIVE mode this raises unless human-approved ---
         if guard is not None:
             guard.assert_entry_allowed(pair, dtf, se.side)
+        # P2-35: vol-targeted leverage. Cap base leverage by regime + bar volatility
+        # so a 1-SL move costs a similar fraction of equity in any vol regime (fixes
+        # F5: thin margin + fixed 2x = tail wipeout). Falls back to base when ATR
+        # unknown.
+        from sizing import regime_leverage, sl_risk_pct
+        _atr_pct = pair_atr.get(pair, 0.0)
+        lev_used = regime_leverage(surface.max_leverage, atr_pct=_atr_pct,
+                                   regime=getattr(state, "regime", "range"))
         # real risk-based sizing (doc 30 §3): 0.25% equity at the SL distance
         info = (registry or SymbolRegistry()).get(pair)
         sl_distance = abs(entry - sl)
@@ -1316,9 +1324,18 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         if info is not None and sl_distance > 0 and entry > 0:
             qty = size_position(equity=equity,
                                 risk_per_trade_pct=surface.risk_per_trade_pct,
-                                entry=entry, sl_price=sl, leverage=surface.max_leverage,
+                                entry=entry, sl_price=sl, leverage=lev_used,
                                 info=info, max_position_notional_pct=surface.max_position_notional_pct)
             qty = qty if qty > 0 else 1.0
+        # guard: if the chosen leverage would risk > MAX_SL_RISK_PCT of equity on a
+        # 1-SL hit, do not size up beyond that (defense-in-depth for F5).
+        _notional = qty * entry * lev_used
+        _risk = sl_risk_pct(equity, _notional, sl_distance / entry * 100.0, lev_used)
+        if _risk > 5.0:
+            # scale qty down to the 5% risk cap
+            qty = qty * (5.0 / _risk)
+            log.warning("sizing capped: SL risk %.2f%% > 5%% (lev %dx, pair %s)",
+                        _risk, lev_used, pair)
         # v0.0.19: pair-level weight for sizing (reduce on consistently losing pairs)
         pair_w = PAIR_WEIGHTS.get(pair, 1.0)
         if pair_w != 1.0:
@@ -1326,7 +1343,7 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             log.debug("pair weight %s=%.2f qty=%.4f", pair, pair_w, qty)
         trade = lc.open(correlation_id=corr_id, pair=pair, tf=dtf,
                         side=se.side, entry_price=entry, size=qty,
-                        leverage=surface.max_leverage, sl_price=sl, tp_price=tp,
+                        leverage=lev_used, sl_price=sl, tp_price=tp,
                         decision_id=corr_id, spread_bps=state.spread_bps,
                         regime=state.regime, scores=se.sub_scores.as_dict())
         open_trades[(pair, dtf, se.side)] = trade

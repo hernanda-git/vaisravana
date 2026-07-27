@@ -117,6 +117,32 @@ class ShadowComparison:
     def promotable(self) -> bool:
         return self.shadow_not_worse and self.health_improved
 
+    @property
+    def statistical_promotable(self) -> bool:
+        """P1-34 promotion gate: requires BOTH the composite-health guard AND a
+        statistically significant NET expectancy$ edge (Wilson-style CI on the
+        per-trade net, sample floor). Prevents promoting a candidate that merely
+        beat baseline on noise (e.g. the ~12-trade SELL sample, review F4).
+
+        Gate inputs come from the P0-31 net_expectancy_usd metric so tight-SL
+        pairs can't smuggle a false edge through (the same R-distortion F1 fix).
+        """
+        if not (self.shadow_not_worse and self.health_improved):
+            return False
+        try:
+            from promotion_gate import evaluate_gate
+        except Exception:
+            return False  # if gate unavailable, be conservative: do NOT promote
+        gate = evaluate_gate(
+            baseline_net=self.baseline.net_expectancy_usd,
+            baseline_n=self.baseline.n_trades,
+            candidate_net=self.shadow.net_expectancy_usd,
+            candidate_n=self.shadow.n_trades,
+            baseline_r=self.baseline.expectancy_r,
+            candidate_r=self.shadow.expectancy_r,
+        )
+        return gate.promotable
+
 
 @dataclass
 class Sentinel:
@@ -154,21 +180,34 @@ class Sentinel:
         # Phase 3 — shadow test
         cmp = comparison_factory(candidate)
 
-        # Phase 4 — promote or rollback
-        if cmp.promotable:
+        # Phase 4 — promote or rollback (P1-34: statistical gate, not raw compare)
+        from promotion_gate import evaluate_gate
+        gate = evaluate_gate(
+            baseline_net=cmp.baseline.net_expectancy_usd,
+            baseline_n=cmp.baseline.n_trades,
+            candidate_net=cmp.shadow.net_expectancy_usd,
+            candidate_n=cmp.shadow.n_trades,
+            baseline_r=cmp.baseline.expectancy_r,
+            candidate_r=cmp.shadow.expectancy_r,
+        )
+        promotable = cmp.shadow_not_worse and cmp.health_improved and gate.promotable
+        if promotable:
             self.history.append((self.config_ver, self.surface))
             self.config_ver += 1
             self.surface = candidate
             promoted = True
             review = (f"PROMOTED v{self.config_ver}: shadow exp "
                       f"{cmp.shadow.expectancy_r:+.3f}R ≥ baseline "
-                      f"{cmp.baseline.expectancy_r:+.3f}R, health ↑")
+                      f"{cmp.baseline.expectancy_r:+.3f}R, health ↑, "
+                      f"gate: {gate.reason}")
         else:
             promoted = False
-            review = ("ROLLBACK: shadow not better "
+            gate_note = gate.reason or "not significant"
+            review = ("ROLLBACK: shadow not better / not significant "
                       f"(exp {cmp.shadow.expectancy_r:+.3f}R vs {cmp.baseline.expectancy_r:+.3f}R, "
                       f"DD {cmp.shadow.max_dd_pct:.2f}% vs {cmp.baseline.max_dd_pct:.2f}%, "
-                      f"health {cmp.shadow.health():.3f} vs {cmp.baseline.health():.3f})")
+                      f"health {cmp.shadow.health():.3f} vs {cmp.baseline.health():.3f}; "
+                      f"gate: {gate_note})")
 
         # Phase 5 — document (results_log, doc 26)
         self._document(
@@ -187,6 +226,72 @@ class Sentinel:
             ver_to=self.config_ver,
         )
         return promoted, self.surface
+
+    # --- P2-36: close the self-improving loop with auto-revert ---
+    def sanity_check(self, surface: ParameterSurface | None = None) -> list[str]:
+        """Degenerate-surface guard. Returns a list of violations (empty = OK).
+
+        Catches the failure modes a self-modifying loop can drift into:
+          - R:R floor broken (tp_atr_mult < 2 * sl_atr_mult) — owner mandate
+          - any factor weight collapsed to 0 (silently kills an engine)
+          - weights no longer sum to ~1 (renorm drift)
+          - leverage outside the safe band
+        """
+        s = surface or self.surface
+        bad: list[str] = []
+        if s.tp_atr_mult < 2.0 * s.sl_atr_mult:
+            bad.append(f"R:R floor broken: tp/sl {s.tp_atr_mult}/{s.sl_atr_mult} < 2:1")
+        wsum = sum(s.weights.model_dump().values())
+        if abs(wsum - 1.0) > 1e-6:
+            bad.append(f"weights sum {wsum:.4f} != 1.0")
+        for k, v in s.weights.model_dump().items():
+            if v <= 0:
+                bad.append(f"weight '{k}' collapsed to {v}")
+        if s.max_leverage < 1 or s.max_leverage > 10:
+            bad.append(f"leverage {s.max_leverage} outside [1,10]")
+        return bad
+
+    def revert(self, reason: str = "auto-revert: sanity check failed") -> ParameterSurface:
+        """Roll the ACTIVE surface back to the previous promoted version.
+
+        Pops the most recent entry off `history`; if empty, keeps the current
+        surface. The reverted-to surface is re-validated by sanity_check and the
+        event is documented in results_log (approved_by='sentinel-revert').
+        """
+        if not self.history:
+            return self.surface
+        prev_ver, prev_surface = self.history.pop()
+        violations = self.sanity_check(prev_surface)
+        if violations:
+            # previous surface itself degenerate — do not revert into it; keep current
+            self.history.append((prev_ver, prev_surface))
+            return self.surface
+        self.surface = prev_surface
+        self.config_ver = prev_ver
+        self._document(
+            _now_iso(), "", "", kind="REVERT",
+            content={"reason": reason}, correction="", improvement="",
+            review=f"reverted to config v{prev_ver}", ver_from=prev_ver + 1,
+            ver_to=prev_ver,
+        )
+        return self.surface
+
+    def promote_guarded(self, prop: Proposal, comparison_factory,
+                        pair: str = "", tf: str = "", cycle_id: str | None = None):
+        """P2-36: cycle() + auto-revert on post-promotion degeneration.
+
+        Runs the normal 5-phase cycle; if the PROMOTED surface fails sanity_check,
+        automatically reverts and returns (promoted=False, reverted_surface).
+        This is the closed loop: the bot can self-promote, but a broken surface is
+        rolled back before it ever reaches live trading (human still gates deploy).
+        """
+        promoted, surface = self.cycle(prop, comparison_factory, pair, tf, cycle_id)
+        if promoted:
+            violations = self.sanity_check(surface)
+            if violations:
+                reverted = self.revert(reason="post-promotion sanity: " + "; ".join(violations))
+                return False, reverted
+        return promoted, surface
 
     def _document(self, cycle_id, pair, tf, kind, content, correction, improvement,
                   review, eval_summary="", reasoning_5w1h="", thinking="",

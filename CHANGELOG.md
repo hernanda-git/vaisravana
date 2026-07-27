@@ -1,5 +1,35 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.25 (2026-07-27) — Robustness P1+P2: walk-forward + stat gate + vol sizing + self-loop + cutover
+Repo-only commit (NO auto-deploy — human-gated cutover per plan).
+
+- **P1-33 walk-forward OOS** (`src/walk_forward.py`): rolling train→test folds over
+  a candle series; each fold scores ONLY its test window (train skipped) so the edge
+  is proven on data the candidate never saw. Reuses `BacktestHarness` (same fees,
+  same SL/TP derivation as production). Demo: `scripts/run_walk_forward.py` (runs on
+  real `data/klines/*.json` when present; synth offline otherwise).
+- **P1-34 statistical promotion gate** (`src/promotion_gate.py`): the Sentinel now
+  promotes ONLY with a sample floor (≥50 OOS trades) AND a significant NET expectancy$
+  edge (Wilson-style CI whose lower bound clears baseline + a min economic edge).
+  Fixes F4: a candidate can no longer "win" on noise (e.g. the ~12-trade SELL sample).
+  Falls back to raw R only when net$ is unmeasured (legacy). Wired into
+  `Sentinel.cycle` + `ShadowComparison.statistical_promotable`.
+- **P2-35 vol-targeted sizing** (`src/sizing.py`): `regime_leverage()` scales leverage
+  DOWN in high-vol regimes / wide-SL setups so a 1-SL move costs a similar fraction of
+  equity (fixes F5: thin margin + fixed 2x = tail wipeout). Bot entry path now sizes
+  with the vol-targeted leverage and hard-caps SL risk at 5% of equity.
+- **P2-36 closed self-improvement loop** (`Sentinel.sanity_check`/`revert`/
+  `promote_guarded`): a promoted surface is auto-reverted if it is degenerate (R:R
+  floor broken, weight collapsed, weights≠1, leverage out of band) before it can reach
+  live trading. Bounded diff (apply_proposal) already guards per-cycle changes.
+- **P2-37 human-gated live cutover** (`src/cutover_gate.py`): LIVE deploy is impossible
+  without explicit human approval. `CutoverGate` records request→approve→reject in the
+  DB; `deploy.py` now refuses `flyctl deploy` unless `can_deploy()` is True (refuses by
+  default if the gate is unreadable). PAPER promotion stays autonomous.
+- Docs: `REVIEW-ROBUSTNESS-2026-07-27.md`, `PLAN-ROBUSTNESS.md`.
+- Tests: phase33 (walk-forward), phase34 (promotion gate), phase35 (sizing),
+  phase36 (self-loop/revert), phase37 (cutover + deploy-gate). Full suite **294 passed**.
+
 ## v0.0.24 (2026-07-27) — Robustness P0: R:R lock + net-expectancy + SELL maturity
 Repo-only commit (NO auto-deploy — human-gated cutover per plan).
 

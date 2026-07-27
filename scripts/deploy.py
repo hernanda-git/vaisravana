@@ -61,6 +61,32 @@ def main() -> None:
     _run(["git", "push", "-q"])
     _run(["git", "push", "-q", "--tags"])
 
+    # 3.5 P2-37: HUMAN-GATED LIVE CUTOVER. Never deploy a surface to LIVE capital
+    # without explicit human approval recorded in the cutover gate. Refuse loudly.
+    sys.path.insert(0, str(ROOT / "src"))
+    try:
+        import sqlite3 as _sqlite
+        from cutover_gate import CutoverGate
+        # production DB is /data/vaisravana.db on Fly; allow local override.
+        db_path = ROOT / "vaisravana.db"
+        live_db = "/data/vaisravana.db"
+        conn = _sqlite.connect(live_db if Path(live_db).exists() else db_path)
+        gate = CutoverGate(conn)
+        if not gate.can_deploy():
+            conn.close()
+            sys.exit(
+                "✋ DEPLOY ABORTED — human cutover not approved (P2-37).\n"
+                "Run the approval flow (CutoverGate.request_deploy + .approve(who=...)) "
+                "and re-run deploy. PAPER promotion is autonomous; LIVE is human-gated."
+            )
+        st = gate.state()
+        print(f"✅ cutover approved by {st.approved_by} for surface v{st.pending_ver}")
+        conn.close()
+    except SystemExit:
+        raise
+    except Exception as e:
+        sys.exit(f"✋ DEPLOY ABORTED — cutover gate unreadable ({e}). Refusing by default.")
+
     # 4. deploy
     _run(["flyctl", "deploy", "--app", APP])
 
