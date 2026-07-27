@@ -1,0 +1,54 @@
+# Caddy reverse proxy for the Vaiśravaṇa bot stack
+# Tencent Lighthouse (ap-jakarta) — migrated from Fly.io
+#
+# CURRENT MODE: path-routed HTTP on :80 (works with NO DNS / NO certs).
+#   curl http://43.157.208.115/gateway/health
+#   curl http://43.157.208.115/listener/
+#
+# PRODUCTION MODE (uncomment the site blocks below and set CF_API_TOKEN):
+#   Replace the `:80` block with the two `subdomain.warga-digital.com` blocks.
+#   Caddy obtains Let's Encrypt certs via the Cloudflare DNS-01 challenge,
+#   so it works behind any firewall (no inbound :80/:443 requirement from LE's side,
+#   though we still open them). Requires:
+#     1) DNS A records: gateway.warga-digital.com + listener.warga-digital.com -> 43.157.208.115
+#     2) Cloudflare API token (Zone:DNS:Edit) exported as CF_API_TOKEN
+
+{
+    email admin@warga-digital.com
+    # acme_dns cloudflare {env.CF_API_TOKEN}   # uncomment for DNS-01 production TLS
+}
+
+# ---- CURRENT: single host, path-routed (no domain needed) ----
+:80 {
+    encode gzip
+
+    handle_path /gateway* {
+        reverse_proxy gateway:8000
+    }
+    handle_path /listener* {
+        reverse_proxy listener:9090
+    }
+
+    # Health/status endpoint for the whole stack (proves Caddy -> backend)
+    handle /up {
+        respond "caddy up" 200
+    }
+
+    # log accesses for audit
+    log {
+        output stdout
+        format console
+    }
+}
+
+# ---- PRODUCTION (uncomment after DNS + CF token are set) ----
+# gateway.warga-digital.com {
+#     encode gzip
+#     reverse_proxy gateway:8000
+#     log { output stdout }
+# }
+# listener.warga-digital.com {
+#     encode gzip
+#     reverse_proxy listener:9090
+#     log { output stdout }
+# }

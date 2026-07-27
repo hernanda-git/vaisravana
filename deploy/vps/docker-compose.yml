@@ -1,0 +1,82 @@
+# Project Vaiśravaṇa bot stack — migrated from Fly.io (sin) to Tencent Lighthouse (ap-jakarta)
+# One stack so listener can reach gateway by service name.
+# v2026-07-28: Caddy reverse proxy + localhost binding + ufw lockdown.
+name: bots
+
+services:
+  gateway:
+    build:
+      context: ./gateway/src
+      dockerfile: Dockerfile
+    env_file: ./gateway/.env
+    container_name: bots-gateway
+    restart: unless-stopped
+    # Bind to loopback only — Caddy (on the host bridge) is the sole ingress.
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks: [bots-net]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  vaisravana:
+    build:
+      context: ./vaisravana/src
+      dockerfile: Dockerfile
+    env_file: ./vaisravana/.env
+    container_name: bots-vaisravana
+    restart: unless-stopped
+    volumes:
+      - ./vaisravana/data:/data
+    networks: [bots-net]
+
+  listener:
+    build:
+      context: ./listener/src
+      dockerfile: Dockerfile
+    env_file: ./listener/.env
+    environment:
+      GATEWAY_URL: "http://gateway:8000"
+    container_name: bots-listener
+    restart: unless-stopped
+    # Bind to loopback only — Caddy is the sole ingress.
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./listener/data:/data
+    networks: [bots-net]
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: bots-caddy
+    restart: unless-stopped
+    ports:
+      # Caddy is the ONLY public ingress. :80 now, add :443 in prod TLS mode.
+      - "80:80"
+      # - "443:443"   # uncomment in production TLS mode
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data/caddy
+      - caddy_config:/config/caddy
+    environment:
+      # CF_API_TOKEN: "your-cloudflare-dns-token"   # only in prod TLS mode
+      TZ: "Asia/Jakarta"
+    networks: [bots-net]
+    depends_on:
+      - gateway
+      - listener
+
+networks:
+  bots-net:
+    name: bots-net
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
