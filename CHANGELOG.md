@@ -1,5 +1,17 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.21 (2026-07-27) — Profile-specific EMAs + context caching
+- **Profile-specific EMA periods** (THE timeframe mismatch fix):
+  - Scalp (1m, hold 15m): EMA5/15 → ~15 min signal matches hold time
+  - Day (15m, hold 4h): EMA20/50 → 12.5h signal (unchanged)
+  - Swing (1h, hold 48h): EMA50/200 → ~200h signal slow enough for swings
+  - Each strategy now has its OWN htf_bias from profile-appropriate EMA periods
+- **Context caching** — BTC/dominance data refreshed every 5 min (not every 60s).
+  Reduces HTTP requests from 270/cycle to ~3/cycle. Makes context actually work.
+- **Unified EMA tolerance** — both bot_paper.py and marketcontext.py now use 0.08%.
+- **build_context_for() refactored** — split into cached (fast) and raw (fetch) paths.
+- +CROSSCHECK_v0.0.20.md documenting 8 blind spots found in deep audit.
+
 ## v0.0.20 (2026-07-27) — Hierarchical HTF direction gate (retracement trap fix)
 - **Replaced the flat `or` direction gate with a strict 5-layer hierarchy:**
   1. Pair's own HTF (15m EMA20/50) must agree with trade side — PRIMARY signal
@@ -13,6 +25,7 @@
 - **ADX threshold raised to 25** (was 20) — stronger trend required.
 - **+16 updated tests** in test_phase25_entry_gate.py covering all 5 layers.
 - Root cause analysis in docs/PLAN_v0.0.20.md.
+- Fixes retracement trap — BUY blocked unless higher TF context agrees.
 
 ## v0.0.19 (2026-07-27) — Full improvement package (ADX, vol-SL, cooldown, trailing stop, per-side threshold)
 - **Tier 1: Directional fix deployed** — v0.0.18 entry_allowed gate (BUY blocked in bearish regime, pullback confirmation) live for the first time with SELL dominance.

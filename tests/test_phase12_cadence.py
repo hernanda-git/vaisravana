@@ -76,7 +76,7 @@ def test_decide_tick_acts_on_latest_closed_bar():
         "1h": _series(100.0, 120, 12.0),
     }
 
-    def fake_state(pair, dec_candles, i, contexts):
+    def fake_state(pair, dec_candles, i, contexts, **kw):
         s = MarketState(symbol=pair, tf=dec_candles[0].tf if hasattr(dec_candles[0], "tf") else "1m",
                         regime="trending_bull", htf_bias="bullish", mtf_aligned=True,
                         body_ratio=1.0, vol_z=3.0, delta_z=2.0, atr=1.0, atr_pct=0.01,

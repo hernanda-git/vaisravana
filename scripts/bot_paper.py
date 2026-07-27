@@ -193,7 +193,19 @@ def volatility_scale(pair: str, atr_pct: float,
 # ── v0.0.19: pair-level weight for sizing ──────────────────────────────
 PAIR_WEIGHTS: dict[str, float] = {}
 
-# Phase 12: time-sensitive cadence.
+# v0.0.21: profile-specific EMA periods — match signal to hold time.
+# Scalp (1m hold 15m): fast EMA5/15 = ~15-bar signal = 15 min.
+# Day (15m hold 4h):  EMA20/50 = ~50-bar signal = 12.5h.
+# Swing (1h hold 48h): EMA50/200 = ~200-bar signal = ~200h.
+PROFILE_EMA: dict[str, tuple[int, int]] = {
+    "scalping": (5, 15),
+    "day": (20, 50),
+    "swing": (50, 200),
+}
+
+# v0.0.21: context cache — BTC/dominance data changes slowly.
+_context_cache: dict = {"ts": 0.0, "data": {}}
+CONTEXT_CACHE_TTL = int(os.getenv("VAISRAVANA_CONTEXT_CACHE_TTL", "300"))  # 5 min
 #   TFS          = structural contexts (default 5m,15m) that feed htf_bias / mtf_aligned,
 #                  making the existing 7-factor engine multi-timeframe WITHOUT engine edits.
 DECISION_TF = os.getenv("VAISRAVANA_DECISION_TF", "1m")
@@ -262,8 +274,8 @@ def build_state(pair: str, tf: str, candles: list[Candle], i: int) -> MarketStat
         for j in range(max(1, i - 13), i + 1)
     )
     atr_pct = atr / bar.c
-    bull = ema20 > ema50 * 1.0005
-    bear = ema20 < ema50 * 0.9995
+    bull = ema20 > ema50 * (1 + 0.0008)
+    bear = ema20 < ema50 * (1 - 0.0008)
     regime = ("high_vol" if atr_pct > 0.012 else
               "trending_bull" if bull else "trending_bear" if bear else "range")
     signed = [(c.c - c.o) / (abs(c.c - c.o) + 1e-9) * c.v for c in w]
@@ -278,35 +290,43 @@ def build_state(pair: str, tf: str, candles: list[Candle], i: int) -> MarketStat
     )
 
 
-def _ema_cross(closes: list[float]) -> tuple[bool, bool]:
-    """Return (bull, bear) from EMA20 vs EMA50 on the given closes (higher-TF bias)."""
-    if len(closes) < 50:
+def _ema_cross(closes: list[float], fast: int = 20, slow: int = 50,
+               tol: float = 0.0008) -> tuple[bool, bool]:
+    """Return (bull, bear) from EMA fast vs slow cross.
+
+    v0.0.21: configurable periods + unified tolerance 0.08%.
+    Default 20/50 = ~50-bar signal (12.5h on 15m).
+    Scalp uses 5/15 on 1m = ~15-bar signal (15 min — matches hold time).
+    """
+    if len(closes) < slow:
         return False, False
-    ema20 = _ema(closes[-20:], 20)
-    ema50 = _ema(closes, 50)
-    return ema20 > ema50 * 1.0005, ema20 < ema50 * 0.9995
+    e_fast = _ema(closes[-fast:], fast) if len(closes) >= fast else _ema(closes, fast)
+    e_slow = _ema(closes, slow)
+    return e_fast > e_slow * (1 + tol), e_fast < e_slow * (1 - tol)
 
 
 def build_state_mtf(pair: str, dec_candles: list[Candle], i: int,
-                     contexts: dict[str, list[Candle]]) -> MarketState:
+                     contexts: dict[str, list[Candle]],
+                     ema_fast: int = 20, ema_slow: int = 50) -> MarketState:
     """Phase 12 — time-sensitive decision state.
 
-    The 1m (DECISION_TF) bar drives the decision + act price. Structural TFs
-    (contexts: {tf: candles}) set `htf_bias` (15m EMA cross) and `mtf_aligned`
-    (1m EMA direction agrees with the higher-TF bias). This makes the EXISTING
-    7-factor engine multi-timeframe without any engine edit — the engines read
-    htf_bias/mtf_aligned already.
+    v0.0.21: profile-specific EMA periods. Scalp (1m) uses 5/15 for ~15-min
+    signal that matches its 15-min hold window. Day (15m) uses 20/50 (12.5h).
+    Swing (1h) uses 50/200 (~200h).
 
-    Acting on the latest closed 1m bar's close = "jump immediately" in PAPER.
+    The decision TF bar drives the decision + act price. Structural TFs
+    (contexts: {tf: candles}) set `htf_bias` (EMA cross) and `mtf_aligned`.
     """
     st = build_state(pair, DECISION_TF, dec_candles, i)
     bar = dec_candles[i]
     # 1m direction (for alignment)
-    dec_bull, dec_bear = _ema_cross([c.c for c in dec_candles[max(0, i - 50): i + 1]])
-    # pick the highest structural TF available for htf_bias (default 15m if present)
+    dec_bull, dec_bear = _ema_cross([c.c for c in dec_candles[max(0, i - 50): i + 1]],
+                                    fast=5, slow=15)
+    # pick the highest structural TF for htf_bias (or use dec candles with profile periods)
     htf_tf = max(contexts.keys(), key=lambda t: _tf_minutes(t)) if contexts else DECISION_TF
     htf = contexts.get(htf_tf) or dec_candles
-    htf_bull, htf_bear = _ema_cross([c.c for c in htf[-50:]])
+    htf_bull, htf_bear = _ema_cross([c.c for c in htf[-(ema_slow + 20):]],
+                                     fast=ema_fast, slow=ema_slow)
     htf_bias = "bullish" if htf_bull else ("bearish" if htf_bear else "neutral")
     # aligned = 1m direction agrees with the HTF bias (don't fight the trend)
     mtf_aligned = ((dec_bull and htf_bull) or (dec_bear and htf_bear)
@@ -352,13 +372,115 @@ def _closes(candles: list[Candle]) -> list[float]:
 
 def build_context_for(pair: str, dec_candles: list[Candle], i: int,
                       contexts: dict[str, list[Candle]]) -> MarketContext:
-    """Build the cross-asset + MTF relational context for one decision tick (v0.0.7).
+    """Build cross-asset + MTF context with caching (v0.0.21).
 
-    Fetches BTC (leader), an alt basket (the other PAIRS), and the LTF/MF/HTF closes
-    for the tradable, then derives BTC bias, dominance proxy, alt RS/breadth, and the
-    3-layer MTF stack. Network is best-effort: any missing series falls back to neutral
-    so the bot never crashes on a fetch hiccup.
+    BTC and dominance data change slowly; cache results for CONTEXT_CACHE_TTL.
     """
+    global _context_cache
+    now = time.time()
+    # Check cache
+    if now - _context_cache["ts"] < CONTEXT_CACHE_TTL and _context_cache["data"]:
+        cached = _context_cache["data"]
+        # Update per-pair MTF fields from current contexts (these change every tick)
+        mtf_tf = max(contexts.keys(), key=_tf_minutes) if contexts else DECISION_TF
+        mtf_htf = contexts.get(mtf_tf) or dec_candles
+        ltf_bias = _ema_cross([c.c for c in dec_candles[max(0, i - 20): i + 1]],
+                               fast=5, slow=15)
+        mtf_bias = _ema_cross([c.c for c in mtf_htf[-(50 + 20):]], fast=20, slow=50)
+        htf_bias = _bias_of(cached.get("htf_closes", []), 50)
+        # Rebuild MTF fields
+        ltf_b = "bullish" if ltf_bias[0] else ("bearish" if ltf_bias[1] else "neutral")
+        mtf_b = "bullish" if mtf_bias[0] else ("bearish" if mtf_bias[1] else "neutral")
+        htf_b = htf_bias
+        biases = [b for b in (ltf_b, mtf_b, htf_b) if b != "neutral"]
+        mtf_cf = len(biases) >= 2 and len(set(biases)) == 1
+        pullback = _compute_pullback(ltf_b, htf_b, dec_candles, i,
+                                     cached.get("pair_htf_closes", []))
+        return MarketContext(
+            btc_bias=cached.get("btc_bias", "neutral"),
+            btc_ret=cached.get("btc_ret", 0.0),
+            dominance_delta=cached.get("dom_delta", 0.0),
+            risk_regime=cached.get("risk", "neutral"),
+            alt_rs_btc=cached.get("alt_rs", 0.0),
+            alt_breadth=cached.get("breadth", 0.5),
+            ltf_bias=ltf_b, mtf_bias=mtf_b, htf_bias=htf_b,
+            mtf_confluence=mtf_cf, pullback_to_anchor=pullback,
+        )
+
+    # ── Cache miss: fetch fresh data ─────────────────────
+    ctx = _build_context_fresh(pair, dec_candles, i, contexts)
+    return ctx
+
+
+def _build_context_fresh(pair, dec_candles, i, contexts):
+    """Fetch and cache fresh context data."""
+    global _context_cache
+    ctx = _build_context_raw(pair, dec_candles, i, contexts)
+    # Cache the slow-changing fields
+    _context_cache = {
+        "ts": time.time(),
+        "data": {
+            "btc_bias": ctx.btc_bias,
+            "btc_ret": ctx.btc_ret,
+            "dom_delta": ctx.dominance_delta,
+            "risk": ctx.risk_regime,
+            "alt_rs": ctx.alt_rs_btc,
+            "breadth": ctx.alt_breadth,
+            "htf_closes": _get_htf_closes(pair, contexts),
+            "pair_htf_closes": _get_pair_htf(pair, dec_candles, contexts),
+        },
+    }
+    return ctx
+
+
+def _get_htf_closes(pair, contexts):
+    """Get BTC closes from the highest available context TF."""
+    import src.marketdata as md  # noqa
+    try:
+        btc_tf = "1h" if "1h" in TFS else (max(TFS, key=_tf_minutes) if TFS else "15m")
+        return [c.c for c in fetch_klines("BTCUSDT", btc_tf, 60)]
+    except Exception:
+        return []
+
+
+def _get_pair_htf(pair, dec_candles, contexts):
+    """Get the pair's HTF closes from context."""
+    htf_tf = max(contexts.keys(), key=_tf_minutes) if contexts else DECISION_TF
+    htf = contexts.get(htf_tf) or dec_candles
+    return [c.c for c in htf]
+
+
+def _compute_pullback(ltf_bias, htf_bias, dec_candles, i, pair_htf_closes):
+    """Check if LTF retraced into HTF bias then resumed (pullback_to_anchor)."""
+    if htf_bias == "neutral" or len(dec_candles) < 20:
+        return False
+    ltf_ret = (dec_candles[-1].c - dec_candles[max(0, i - 10)].c) / \
+              (dec_candles[max(0, i - 10)].c or 1e-12)
+    pair_ret = (pair_htf_closes[-1] - pair_htf_closes[max(0, len(pair_htf_closes) - 10)]) / \
+               (pair_htf_closes[max(0, len(pair_htf_closes) - 10)] or 1e-12) if pair_htf_closes else 0.0
+    if htf_bias == "bullish":
+        return ltf_ret < 0 and pair_ret >= 0
+    return ltf_ret > 0 and pair_ret <= 0
+
+
+def _bias_of(closes: list[float], period: int = 50) -> str:
+    """EMA20/50 bias with 0.08% tolerance."""
+    if len(closes) < period:
+        return "neutral"
+    e20 = _ema(closes[-20:], 20)
+    e50 = _ema(closes, period)
+    if e20 > e50 * (1 + 0.0008):
+        return "bullish"
+    if e20 < e50 * (1 - 0.0008):
+        return "bearish"
+    return "neutral"
+
+
+def _build_context_raw(pair: str, dec_candles: list[Candle], i: int,
+                        contexts: dict[str, list[Candle]]) -> MarketContext:
+    """Original context builder (uncached) — used on cache miss."""
+    from marketcontext import build_context, ContextSeries
+
     def get(sym: str, tf: str, n: int = 60) -> list[float]:
         try:
             cs = fetch_klines(sym, tf, n)
@@ -366,14 +488,11 @@ def build_context_for(pair: str, dec_candles: list[Candle], i: int,
         except Exception:
             return []
 
-    # BTC leader (use the highest structural TF available, else 1h)
     btc_tf = "1h" if "1h" in TFS else (max(TFS, key=_tf_minutes) if TFS else "15m")
     btc = get("BTCUSDT", btc_tf)
-    # alt basket = the other configured pairs (relative strength + breadth)
     basket = [get(p, btc_tf) for p in PAIRS if p != pair]
     basket = [b for b in basket if len(b) >= 50]
     pair_htf = get(pair, btc_tf)
-    # LTF/MF/HTF of the tradable (anchor = HTF, pullback = LTF)
     ltf = get(pair, DECISION_TF)
     mtf = get(pair, (max(TFS, key=_tf_minutes) if TFS else "15m"))
     htf = pair_htf or btc
@@ -888,7 +1007,8 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         contexts = {tf: cache[tf] for tf in TFS
                     if tf in cache and tf != dtf and len(cache[tf]) >= 50}
         i = len(dec) - 1
-        state = build_state_mtf(pair, dec, i, contexts)
+        ema_fast, ema_slow = PROFILE_EMA.get(profile.name, (20, 50))
+        state = build_state_mtf(pair, dec, i, contexts, ema_fast=ema_fast, ema_slow=ema_slow)
         try:
             ctx = build_context_for(pair, dec, i, contexts)
             state.btc_bias = ctx.btc_bias
