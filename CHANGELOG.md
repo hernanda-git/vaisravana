@@ -1,5 +1,21 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.1.8 (2026-07-26) — Directional + expectancy entry gate (the WR fix)
+- **Core win-rate fix** (eval showed 36.7% WR / −1.75R; BUY was 23.7% / −8.78R):
+  - New `entry_allowed(state, side, sc, sexp)` gate (pure + TDD, 7 tests):
+    1. **Side-bleed block** — a side with ≥20 samples and negative expectancy is blocked
+       (keeps the v0.1.6 idea, re-expressed as a single gate).
+    2. **Directional regime filter** — BUY only in a bullish regime (htf_bias/btc_bias/
+       risk_regime); SELL only when NOT bullish. Kills the long-bias-into-downtrend bleed.
+    3. **Pullback confirmation** in a neutral regime — no chasing extremes without a
+       `pullback_to_anchor`.
+  - Replaces the weaker v0.1.6 side-bleed gate in `_decide_tick`; gated decisions are
+    persisted to `decisions_log` as `GATED` (audit trail complete).
+- **Evaluation** written to `docs/EVALUATION.md` (full live-DB breakdown + root-cause +
+  improvement plan). Bot stopped (machine `78475e3ce4dd58` halted); caretaker cron removed
+  itself after committing the eval doc.
+- **+7 tests** (tests/test_phase25_entry_gate.py) → 211 passing.
+
 ## v0.1.7 (2026-07-26) — Telegram `/stop` + `/health` commands + decisions_log persistence
 - **Owner slash commands (owner ask):**
   - `/stop` — graceful halt: sets a control flag, the main loop exits at end of the
