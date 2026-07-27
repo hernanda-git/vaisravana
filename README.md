@@ -80,6 +80,8 @@ Env (Fly secrets): `VAISRAVANA_PAPER=1`, `NOTIFY_CHAT_ID`, `TELEGRAM_BOT_TOKEN`,
 
 ## Evaluation & docs
 - `docs/EVALUATION.md` — full live-DB performance breakdown, root-cause, improvement plan.
+- `docs/REVIEW-ROBUSTNESS-2026-07-27.md` — honest end-to-end robustness audit (what's solid, real fragilities, live numbers).
+- `docs/PLAN-ROBUSTNESS.md` — phased TDD plan: P0 correctness/robustness → P1 validity (walk-forward + CI promotion gate) → P2 adaptiveness + closed self-loop.
 - `CHANGELOG.md` — version history.
 - `scripts/verify_activity.py` — empirical backtest harness (OLD vs NEW expectancy).
 
