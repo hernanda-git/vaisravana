@@ -1,5 +1,9 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.29 (2026-07-27)
+- Hentikan kartu 👁 Decisions tiap siklus (spam). Audit tetap di decisions_log. Tambah /decisions untuk tarik data on-demand, kolom side, retensi 1d->7d.
+
+
 ## v0.0.26 (2026-07-27) — Fix kill-switch Telegram spam + fresh/clean deploy
 Repo commit (PAPER). Live PAPER machine stopped, /data wiped, redeployed fresh.
 
