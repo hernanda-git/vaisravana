@@ -113,7 +113,7 @@ def test_bleeding_side_is_suppressed(monkeypatch):
         {}, registry=None, decision_sink=sink, klines_cache=klines_cache)
 
     assert not fill_calls, "bleeding BUY side must NOT open"
-    assert any(row[5] == "SUPPRESSED" for row in sink)
+    assert any(row[5] == "GATED" for row in sink)
 
 
 def test_decide_tick_persists_decision_log(monkeypatch):

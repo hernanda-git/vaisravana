@@ -73,6 +73,41 @@ SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", "/data/surface.json")
 # v0.1.6: caretaker cron state file (deploy cooldown + excluded pairs). `/clean` removes
 # it so the caretaker may re-tune immediately after a fresh start.
 CRON_STATE_PATH = Path(__file__).resolve().parent.parent / ".vaisravana_cron_state.json"
+
+# v0.1.8: expectancy-first side gate (expectancy-driven, NOT an 85% WR gate).
+SIDE_EXP_MIN_SAMPLES = int(os.getenv("VAISRAVANA_SIDE_MIN_SAMPLES", "20"))
+SIDE_EXP_FLOOR_R = float(os.getenv("VAISRAVANA_SIDE_EXP_FLOOR", "-0.05"))
+
+
+def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
+    """v0.1.8 entry gate — the core WR fix.
+
+    A trade may open only if ALL hold:
+      1. Side not bleeding: a side with >= MIN_SAMPLES and negative expectancy is blocked
+         (stops a side after it proves unprofitable — v0.1.6 idea, kept).
+      2. Directional regime filter: BUY only in a bullish regime (htf_bias/btc_bias/
+         risk_regime); SELL only when NOT bullish. Long-biasing into a downtrend is the
+         single biggest WR killer (BUY was 23.7% WR / -8.78R live).
+      3. Pullback confirmation in a neutral regime: don't chase extremes — require
+         `pullback_to_anchor` unless the trend clearly aligns with the side.
+
+    Returns (allowed, reason). Pure + testable.
+    """
+    if sc >= SIDE_EXP_MIN_SAMPLES and sexp < SIDE_EXP_FLOOR_R:
+        return False, (f"{side} bleeding: exp {sexp:+.2f}R over {sc} trades "
+                       f"(<{SIDE_EXP_FLOOR_R:+.2f}R floor) — side suppressed")
+    bull = (getattr(state, "htf_bias", "neutral") == "bullish"
+            or getattr(state, "btc_bias", "neutral") == "bullish"
+            or getattr(state, "risk_regime", "neutral") == "bullish")
+    if side == "BUY" and not bull:
+        return False, f"BUY blocked: regime not bullish (htf={getattr(state,'htf_bias','?')},btc={getattr(state,'btc_bias','?')})"
+    if side == "SELL" and bull:
+        return False, "SELL blocked: regime bullish"
+    aligned = (side == "BUY" and bull) or (side == "SELL" and not bull and getattr(state, "htf_bias", "neutral") == "bearish")
+    if not aligned and not getattr(state, "pullback_to_anchor", False):
+        return False, "no pullback_to_anchor in neutral regime (chasing extremes)"
+    return True, ""
+
 # Phase 12: time-sensitive cadence.
 #   DECISION_TF = the bar we DECIDE + ACT on every cycle (default 1m = jump immediately).
 #   TFS          = structural contexts (default 5m,15m) that feed htf_bias / mtf_aligned,
@@ -772,21 +807,19 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             _persist_decisions_log(conn, pair, dtf, state, se, se.decision)
             continue
 
-        # v0.1.6: side-bleed gate — block ENTRY on a side whose recent expectancy is
-        # negative (enough samples). BUY was -14R; this stops the bleed without an
-        # irrational WR gate. Re-evaluated every tick, so it unblocks when the side recovers.
+        # v0.1.8: directional + expectancy entry gate (the core WR fix). Replaces the
+        # weaker v0.1.6 side-bleed gate with a full regime + pullback filter.
         sc, sexp = lc.side_expectancy(se.side)
-        if sc >= SIDE_EXP_MIN_SAMPLES and sexp < SIDE_EXP_FLOOR_R:
-            reason = (f"{se.side} bleeding: exp {sexp:+.2f}R over {sc} trades "
-                      f"(<{SIDE_EXP_FLOOR_R:+.2f}R floor) — side suppressed")
+        allowed, reason = entry_allowed(state, se.side, sc, sexp)
+        if not allowed:
             if decision_sink is not None:
                 decision_sink.append((pair, dtf, profile.name, se.side,
-                                      round(se.chosen_score, 3), "SUPPRESSED"))
+                                      round(se.chosen_score, 3), "GATED"))
             else:
                 notifier.notify_decision(pair, dtf, "SKIP", se.chosen_score,
                                          se.side, reason)
-            # v0.1.7: persist the SUPPRESSED decision (side-bleed gate blocked)
-            _persist_decisions_log(conn, pair, dtf, state, se, "SUPPRESSED", reason=reason)
+            # v0.1.7: persist the GATED decision so the audit trail is complete
+            _persist_decisions_log(conn, pair, dtf, state, se, "GATED", reason=reason)
             continue
 
         # v0.1.7: persist ENTRY decision to decisions_log
