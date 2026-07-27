@@ -107,7 +107,13 @@ TABLES = ("trade_logs", "decisions_log", "results_log", "exec_events", "system_h
 
 def get_connection(db_path: str | Path) -> sqlite3.Connection:
     """Open a sqlite connection with row access by name + FK off (sqlite default)."""
-    conn = sqlite3.connect(str(db_path))
+    # v0.0.33: check_same_thread=False — the Telegram command listener dispatches
+    # /status //positions etc. from its daemon thread while `conn` is created on the
+    # main thread. CPython's sqlite3 is built with threadsafety=3 (serialized), so
+    # sharing one connection across threads is safe; without this flag every
+    # /status card died with "SQLite objects created in a thread can only be used
+    # in that same thread".
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 

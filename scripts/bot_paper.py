@@ -826,8 +826,8 @@ def run() -> None:
         elif cmd == "/reload":
             nonlocal surface
             try:
-                from surface import SurfaceLoader
-                surface = SurfaceLoader().load()
+                # v0.0.33: `surface` module never existed — reload via load_surface()
+                surface = load_surface()
                 notifier.send_message("✅ Config reloaded from disk")
             except Exception as e:
                 notifier.send_message(f"❌ Reload failed: {e}")
@@ -913,7 +913,7 @@ def run() -> None:
             f"Weights: T={w.trend} M={w.momentum} V={w.volume} S={w.structure} "
             f"L={w.liquidity} A={w.atr} F={w.funding_oi}",
             f"Daily loss limit: {surface.daily_loss_limit_pct}%",
-            f"Max concurrently open: {surface.max_concurrent_trades}",
+            f"Max live pairs: {surface.global_max_live_pairs}",
             f"Mode: {mode.upper()} | Pairs: {len(PAIRS)}",
         ]
         notifier.send_message("\n".join(lines))

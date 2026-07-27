@@ -49,7 +49,10 @@ def _make(updates, allowed):
         if text.startswith("/"):
             self._on(text, text)
 
-    tb.TelegramCommandListener._poll_once = _poll_once
+    # patch the INSTANCE only — patching the class leaked the stub into every
+    # later test (test_phase23_clean saw an empty dispatch list).
+    import types
+    ln._poll_once = types.MethodType(_poll_once, ln)
     return ln, dispatched
 
 
