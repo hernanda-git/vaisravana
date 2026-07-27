@@ -843,18 +843,28 @@ def run() -> None:
     # v0.0.22: add necessary imports for command handlers
     from datetime import datetime, timezone
 
-    # start the Telegram command listener (polls getUpdates in a daemon thread)
+    # start the telegram command listener (polls getUpdates in a daemon thread)
     # v0.0.26: owner-only gate. allowed_chat_id defaults to None -> when
     # NOTIFY_CHAT_ID is SET in the env, ONLY that chat's /commands are honored;
     # everything else is ignored. This prevents a second bot (sharing the same
     # Telegram token / update stream) from having its commands "nyampur" (mixed
-    # in) to THIS bot. SET NOTIFY_CHAT_ID to your owner chat on Fly.
-    _cmd_listener = TelegramCommandListener(
-        notifier, _dispatch,
-        poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID") or None,
-    )
-    _cmd_listener.start()
-    log.info("Telegram /clean /stop /health listener started")
+    # in) to THIS bot.
+    # v0.0.27: opt-out. If two bots share one token, ONLY ONE should
+    # poll getUpdates or they fight over the stream (offset starvation -> the
+    # other bot eats your /commands). Set VAISRAVANA_CMD_LISTEN=0 to make
+    # THIS bot stop polling entirely and leave the other bot as the sole handler.
+    _cmd_listen = os.getenv("VAISRAVANA_CMD_LISTEN", "1") not in ("0", "false", "no")
+    _cmd_listener = None
+    if _cmd_listen:
+        _cmd_listener = TelegramCommandListener(
+            notifier, _dispatch,
+            poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID") or None,
+        )
+        _cmd_listener.start()
+        log.info("Telegram /clean /stop /health listener started")
+    else:
+        log.info("Telegram command listener DISABLED (VAISRAVANA_CMD_LISTEN=0) "
+                  "- another bot owns the shared token's getUpdates stream")
 
     while True:
         try:
