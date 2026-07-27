@@ -39,7 +39,7 @@ MIN_TRADES = 10
 class PairExcluder:
     """Holds the excluded-pair set + per-pair rolling sample, persisted to disk."""
 
-    def __init__(self, path: str | Path = "/data/exclusions.json",
+    def __init__(self, path: str | Path = "data/exclusions.json",
                  exclude_below: float = EXCLUDE_BELOW_USD,
                  include_above: float = INCLUDE_ABOVE_USD,
                  min_trades: int = MIN_TRADES,

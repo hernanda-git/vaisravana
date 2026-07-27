@@ -116,7 +116,9 @@ def init_db(db_path: str | Path = "vaisravana.db") -> sqlite3.Connection:
     """Create all telemetry tables if absent. Returns an open connection.
 
     Idempotent: re-running does not drop or alter existing tables.
+    v0.0.32: ensure the parent directory exists so a fresh VPS (./data default) works.
     """
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)
     conn.executescript(_SCHEMA_SQL)
     migrate(conn)  # v0.0.24 P0-31: add fees_usd to existing DBs (safe ALTER)

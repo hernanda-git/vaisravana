@@ -44,6 +44,43 @@ from safety import KillSwitch  # noqa: E402
 from scoring import decide  # noqa: E402
 from telemetry import Telemetry  # noqa: E402
 from execution import size_position  # noqa: E402
+
+# v0.0.32: load a local .env (optional) so the same code runs on a bare VPS without
+# editing fly.toml. python-dotenv is not a dependency — use a tiny inline parser.
+def _load_dotenv(path: str = ".env") -> None:
+    p = Path(path)
+    if not p.exists():
+        return
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            os.environ.setdefault(k, v)
+    except Exception as e:  # never block boot on a bad .env
+        log.warning("dotenv load skipped: %s", e)
+
+_load_dotenv()
+
+# v0.0.32: urllib does not honor HTTP_PROXY/HTTPS_PROXY by default. Build a proxy-aware
+# opener once if either var is set, so a Tencent/VPS deployment behind a proxy can reach
+# Binance + Telegram. No-op when no proxy is configured.
+def _install_proxy_opener() -> None:
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if not proxy:
+        return
+    try:
+        import urllib.request as _ur
+        handler = _ur.ProxyHandler({"http": proxy, "https": proxy})
+        _ur.install_opener(_ur.build_opener(handler))
+        log.info("proxy opener installed (%s)", proxy)
+    except Exception as e:
+        log.warning("proxy opener failed: %s", e)
+
+_install_proxy_opener()
+
 from symbols import SymbolRegistry  # noqa: E402
 from marketdata import FeedHealth  # noqa: E402
 from mode import ModeGuard, PaperSimExchange  # noqa: E402
@@ -65,11 +102,21 @@ PAIRS = [resolve_symbol(p) for p in
          os.getenv("VAISRAVANA_PAIRS", ",".join(DEFAULT_UNIVERSE)).split(",") if p]
 # The higher structural contexts every strategy reads for bias + structure.
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
-FETCH_URL = "https://fapi.binance.com/fapi/v1/klines?symbol={s}&interval={t}&limit={n}"
+# v0.0.32: data source is env-driven so the bot runs on any host (Fly, bare VPS, Tencent).
+# Binance fapi is geo-blocked in some regions (e.g. mainland CN) — point FETCH_URL at a
+# proxy/mirror there. No proxy support in urllib, so use a full URL override.
+FETCH_URL = os.getenv(
+    "VAISRAVANA_KLINES_URL",
+    "https://fapi.binance.com/fapi/v1/klines?symbol={s}&interval={t}&limit={n}")
+# Optional HTTP(S) proxy for kline + Telegram fetches (urllib reads HTTP_PROXY/HTTPS_PROXY
+# only when opener is built with ProxyHandler — see _install_proxy()).
 FETCH_LIMIT = int(os.getenv("VAISRAVANA_KLINES", "600"))
 CYCLE_S = int(os.getenv("VAISRAVANA_CYCLE_S", "60"))  # 60s = one decision per minute
-DB_PATH = os.getenv("VAISRAVANA_DB", "/data/vaisravana.db")
-SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", "/data/surface.json")
+# v0.0.32: default to a local ./data dir (works on any host) instead of Fly-only /data.
+# Set VAISRAVANA_DB=/data/vaisravana.db on Fly to keep the volume behaviour.
+_DATA_DIR = os.getenv("VAISRAVANA_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data"))
+DB_PATH = os.getenv("VAISRAVANA_DB", os.path.join(_DATA_DIR, "vaisravana.db"))
+SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", os.path.join(_DATA_DIR, "surface.json"))
 # v0.0.16: caretaker cron state file (deploy cooldown + excluded pairs). `/clean` removes
 # it so the caretaker may re-tune immediately after a fresh start.
 CRON_STATE_PATH = Path(__file__).resolve().parent.parent / ".vaisravana_cron_state.json"
@@ -246,6 +293,9 @@ def load_surface() -> config.ParameterSurface:
 def fetch_klines(symbol: str, tf: str, limit: int) -> list[Candle]:
     import urllib.request
     url = FETCH_URL.format(s=symbol, t=tf, n=limit)
+    # v0.0.32: urlopen uses the process-wide proxy opener installed at import time
+    # (no-op when HTTPS_PROXY/HTTP_PROXY is unset), so a VPS behind a proxy reaches
+    # Binance. Falls back naturally when no proxy is configured.
     raw = json.loads(urllib.request.urlopen(url, timeout=15).read().decode())
     return [Candle(ts=r[0], o=float(r[1]), h=float(r[2]), l=float(r[3]),
                    c=float(r[4]), v=float(r[5])) for r in raw]
@@ -592,11 +642,12 @@ def run() -> None:
     guard = ModeGuard(mode=mode)  # live_exchange=None in paper -> PaperSimExchange
     exchange = guard.exchange_for(None)  # PaperSimExchange in paper; GuardedExchange in live
     monitor = PositionMonitor(exchange, clock=time.time)
-    # v0.0.23 T2: data-driven pair exclusion (doc 45 §3). Persisted to
-    # /data/exclusions.json so it survives Fly restarts. Pairs with rolling
-    # WR < 40% over >=10 trades are skipped until they recover >= 50%.
+    # v0.0.23 T2: data-driven pair exclusion (doc 45 §3). Persisted to the data dir
+    # (default ./data, portable; on Fly set VAISRAVANA_EXCLUSIONS=/data/exclusions.json).
+    # Pairs with rolling WR < 40% over >=10 trades are skipped until they recover >= 50%.
     from pair_excluder import PairExcluder
-    excluder = PairExcluder(os.getenv("VAISRAVANA_EXCLUSIONS", "/data/exclusions.json"))
+    excluder = PairExcluder(os.getenv("VAISRAVANA_EXCLUSIONS",
+                                       os.path.join(_DATA_DIR, "exclusions.json")))
     # v0.0.23 T3: track BUY/SELL entry share; nudge SELL threshold down
     # (never below watch) when SELL is structurally suppressed (< 25%).
     from side_balancer import SideBalancer
