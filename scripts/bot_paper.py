@@ -596,6 +596,10 @@ def run() -> None:
     # WR < 40% over >=10 trades are skipped until they recover >= 50%.
     from pair_excluder import PairExcluder
     excluder = PairExcluder(os.getenv("VAISRAVANA_EXCLUSIONS", "/data/exclusions.json"))
+    # v0.0.23 T3: track BUY/SELL entry share; nudge SELL threshold down
+    # (never below watch) when SELL is structurally suppressed (< 25%).
+    from side_balancer import SideBalancer
+    side_balancer = SideBalancer()
     # seed the monitor with any positions reloaded from the DB at boot
     for key, t in open_trades.items():
         monitor.track(Position(
@@ -871,7 +875,9 @@ def run() -> None:
                              equity=equity, loss_book=realized_loss_today,
                              monitor=monitor, exchange=exchange, guard=guard,
                              klines_cache=klines_cache, decision_sink=cycle_decisions,
-                                          cooldowns=cooldowns, pair_atr=pair_atr, excluder=excluder)
+                             klines_cache=klines_cache, decision_sink=cycle_decisions,
+                             cooldowns=cooldowns, pair_atr=pair_atr, excluder=excluder,
+                             side_balancer=side_balancer)
                 # push the latest price into the sim exchange so the monitor's
                 # mark-price SL/TP/orphan/maxhold logic is real (doc 30 §3, doc 32 L4)
                 _last_decs = klines_cache.get(DECISION_TF) or []
@@ -1082,7 +1088,7 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                 registry=None, daily_loss_pct=0.0, feed_frozen=False, equity=1000.0,
                 loss_book=None, monitor=None, exchange=None, guard=None,
                 klines_cache=None, decision_sink=None, cooldowns=None, pair_atr=None,
-                excluder=None):
+                excluder=None, side_balancer=None):
     """Phase 12 — time-sensitive decision tick.
 
     v0.0.19: +cooldowns (post-SL cooldown dict), +pair_atr (volatility-adaptive SL).
@@ -1197,11 +1203,18 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         bull = (getattr(state, "htf_bias", "neutral") == "bullish"
                 or getattr(state, "btc_bias", "neutral") == "bullish"
                 or getattr(state, "risk_regime", "neutral") == "bullish")
+        # v0.0.19: per-side entry threshold adjustment — BUY needs higher
+        # threshold in non-bull regime; SELL needs higher in bull regime.
+        # v0.0.23 T3: also nudge SELL down when structurally suppressed
+        # (< 25% share) so we don't fight the profitable short side.
         effective_threshold = profile.entry_threshold
         if se.side == "BUY" and not bull:
             effective_threshold = min(profile.entry_threshold + SIDE_THRESHOLD_ADJ, 0.92)
         elif se.side == "SELL" and bull:
             effective_threshold = min(profile.entry_threshold + SIDE_THRESHOLD_ADJ, 0.92)
+        elif se.side == "SELL" and side_balancer is not None:
+            effective_threshold = side_balancer.sell_threshold(
+                profile.entry_threshold, profile.watch_threshold)
 
         # Re-check effective threshold if the base score was ENTRY
         if se.decision == "ENTRY" and se.chosen_score < effective_threshold:
@@ -1300,6 +1313,9 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                        side=se.side, price=entry, qty=qty, status="FILLED")
         notifier.notify_fill(pair, dtf, se.side, entry, sl, tp, surface.max_leverage,
                              strategy=profile.name)
+        # v0.0.23 T3: record the entry side for SELL-share balancing.
+        if side_balancer is not None:
+            side_balancer.record(se.side)
 
 
 def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,
