@@ -231,10 +231,10 @@ def test_orchestrator_full_cycle_decision_to_eval(conn):
     orch = PaperOrchestrator(conn)
     out = orch.on_candle_close(_bull(), entry_price=100.0, atr=1.0)
     assert out.record.actionable and out.opened is not None
-    # SL/TP derived from ATR multipliers (v0.1.0 default: sl 1.0×ATR, tp 1.5×ATR, R:R 1.5)
+    # SL/TP derived from ATR multipliers (v0.0.23 default: sl 1.0×ATR, tp 2.0×ATR, R:R 2:1)
     assert out.opened.sl_price == pytest.approx(99.0)
-    assert out.opened.tp_price == pytest.approx(101.5)
-    rep = orch.close_trade("BTCUSDT", "5m", "BUY", exit_price=101.5, reason="TP")
+    assert out.opened.tp_price == pytest.approx(102.0)
+    rep = orch.close_trade("BTCUSDT", "5m", "BUY", exit_price=102.0, reason="TP")
     assert rep.n_trades == 1 and rep.win_rate_pct == 100.0
     # full audit trail exists
     assert conn.execute("SELECT COUNT(*) c FROM decisions_log").fetchone()["c"] == 1

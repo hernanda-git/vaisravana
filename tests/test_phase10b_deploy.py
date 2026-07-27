@@ -106,7 +106,7 @@ def test_get_open_positions_restart_safe():
 
 def test_health_check_sent_on_deploy():
     n = StubNotifier()
-    ok = n.notify_health_check("0.0.7", "sin", 0, feed_ok=True)
+    ok = n.notify_health_check("0.0.23", "sin", 0, feed_ok=True)
     assert ok is True
     body = n._client.calls[0]["text"]
-    assert "Health Check" in body and "v0.0.7" in body and "sin" in body
+    assert "v0.0.23" in body and "sin" in body and "SEHAT" in body

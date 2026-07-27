@@ -1,10 +1,11 @@
 # Changelog — Project Vaiśravaṇa
 
-## v0.0.23 (PLANNED) — Honor owner R:R≥2:1 mandate + de-bleed + SELL balance
-- **T1:** Enforce `tp_atr_mult / sl_atr_mult ≥ 2.0` in config (hard floor validator). Active profile R:R 1.5:1 → 2:1; break-even WR 40% → 33.3%.
-- **T2:** Auto-exclude pairs with rolling WR < 40% (≥10 trades); re-include on recovery >50%. Measured: removes 6 bleed pairs, lifts aggregate WR 46.3% → 58.1% with zero logic risk.
-- **T3:** Per-side SELL score offset + min 25% SELL share (un-suppress the 10:1 BUY:SELL asymmetry).
+## v0.0.23 (2026-07-27) — Honor owner R:R≥2:1 mandate + de-bleed + SELL balance
+- **T1 R:R≥2:1 (CRITICAL):** `ParameterSurface` now enforces a HARD floor validator `tp_atr_mult/sl_atr_mult ≥ 2.0`. Active PAPER default 1.5:1 → **2:1** (break-even WR 40%→33.3%). Owner mandate "1 win recovers 2 losses" is now in code, not by hope.
+- **T2 pair de-bleed:** new `PairExcluder` skips pairs with rolling WR < 40% over ≥10 trades; re-includes on recovery ≥50%. Persisted to `/data/exclusions.json`. Measured: removes 6 bleed pairs, lifts aggregate WR **46%→58%** with zero logic risk.
+- **T3 SELL un-suppression:** new `SideBalancer` tracks BUY/SELL entry share; nudges SELL threshold down (clamped at watch band) when SELL < 25%. Opens the suppressed short half (was 10:1 BUY:SELL).
 - Docs: `45-comprehensive-strategy-review.md` (full factor inventory, measured) + `PLAN_v0.0.23.md`.
+- 19 new tests (T1/T2/T3), all green.
 
 ## v0.0.22 (2026-07-27) — Regime-adaptive weights + Telegram commands + SMC gate
 - **Regime-adaptive weights** — ADX-driven factor mix:

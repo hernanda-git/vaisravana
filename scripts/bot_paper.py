@@ -875,7 +875,6 @@ def run() -> None:
                              equity=equity, loss_book=realized_loss_today,
                              monitor=monitor, exchange=exchange, guard=guard,
                              klines_cache=klines_cache, decision_sink=cycle_decisions,
-                             klines_cache=klines_cache, decision_sink=cycle_decisions,
                              cooldowns=cooldowns, pair_atr=pair_atr, excluder=excluder,
                              side_balancer=side_balancer)
                 # push the latest price into the sim exchange so the monitor's
