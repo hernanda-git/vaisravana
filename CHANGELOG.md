@@ -1,5 +1,19 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.20 (2026-07-27) — Hierarchical HTF direction gate (retracement trap fix)
+- **Replaced the flat `or` direction gate with a strict 5-layer hierarchy:**
+  1. Pair's own HTF (15m EMA20/50) must agree with trade side — PRIMARY signal
+  2. Higher TF (1h/4h EMA20/50) must NOT disagree — **prevents the retracement trap**
+  3. BTC leader only overrides DOWN (never up)
+  4. Risk regime only overrides DOWN (never up)
+  5. Neutral HTF requires pullback confirmation
+- **Result:** BUY is blocked unless BOTH the pair's 15m AND the 1h/4h trends support it.
+  No more "BTC said bullish so BUY passes" — the pair's own trend is the primary gate.
+- **ADX moved to structural TF** (15m/1h instead of 1m) — 1m ADX was too noisy.
+- **ADX threshold raised to 25** (was 20) — stronger trend required.
+- **+16 updated tests** in test_phase25_entry_gate.py covering all 5 layers.
+- Root cause analysis in docs/PLAN_v0.0.20.md.
+
 ## v0.0.19 (2026-07-27) — Full improvement package (ADX, vol-SL, cooldown, trailing stop, per-side threshold)
 - **Tier 1: Directional fix deployed** — v0.0.18 entry_allowed gate (BUY blocked in bearish regime, pullback confirmation) live for the first time with SELL dominance.
 - **Tighter side-bleed floor** (−0.10R from −0.05R) via `SIDE_EXP_FLOOR_R` — catches directional bleed faster.

@@ -82,33 +82,62 @@ SL_COOLDOWN_TICKS = int(os.getenv("VAISRAVANA_SL_COOLDOWN", "3"))
 
 
 def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
-    """v0.0.18 entry gate — the core WR fix.
+    """v0.0.20 hierarchical HTF gate — fixes the retracement trap.
 
     A trade may open only if ALL hold:
-      1. Side not bleeding: a side with >= MIN_SAMPLES and negative expectancy is blocked
-         (stops a side after it proves unprofitable — v0.0.16 idea, kept).
-      2. Directional regime filter: BUY only in a bullish regime (htf_bias/btc_bias/
-         risk_regime); SELL only when NOT bullish. Long-biasing into a downtrend is the
-         single biggest WR killer (BUY was 23.7% WR / -8.78R live).
-      3. Pullback confirmation in a neutral regime: don't chase extremes — require
-         `pullback_to_anchor` unless the trend clearly aligns with the side.
+      1. Side not bleeding (unchanged from v0.0.18).
+      2. Pair's own HTF trend (htf_bias, EMA20/50 on highest context TF) must
+         agree with the trade side — this is the PRIMARY directional signal.
+      3. Higher TF (htf_bias2, 1h/4h) must agree — prevents buying a 15m
+         retracement within a 1h downtrend (THE root cause of the 25% BUY WR).
+      4. BTC leader (btc_bias) and risk regime only override DOWN (never UP) —
+         they can block but never allow against the pair's own HTF signal.
+      5. Neutral HTF with no pullback → blocked (don't chase extremes).
 
     Returns (allowed, reason). Pure + testable.
     """
+    # 1. Side-bleed check (unchanged)
     if sc >= SIDE_EXP_MIN_SAMPLES and sexp < SIDE_EXP_FLOOR_R:
         return False, (f"{side} bleeding: exp {sexp:+.2f}R over {sc} trades "
                        f"(<{SIDE_EXP_FLOOR_R:+.2f}R floor) — side suppressed")
-    bull = (getattr(state, "htf_bias", "neutral") == "bullish"
-            or getattr(state, "btc_bias", "neutral") == "bullish"
-            or getattr(state, "risk_regime", "neutral") == "bullish")
-    if side == "BUY" and not bull:
-        return False, f"BUY blocked: regime not bullish (htf={getattr(state,'htf_bias','?')},btc={getattr(state,'btc_bias','?')})"
-    if side == "SELL" and bull:
-        return False, "SELL blocked: regime bullish"
-    aligned = (side == "BUY" and bull) or (side == "SELL" and not bull and getattr(state, "htf_bias", "neutral") == "bearish")
-    if not aligned and not getattr(state, "pullback_to_anchor", False):
-        return False, "no pullback_to_anchor in neutral regime (chasing extremes)"
-    return True, ""
+
+    # 2. Read state signals
+    htf = getattr(state, "htf_bias", "neutral")   # pair's own HTF (15m/1h EMA20/50)
+    htf2 = getattr(state, "htf_bias2", "neutral") # higher TF (1h/4h EMA20/50)
+    btc = getattr(state, "btc_bias", "neutral")
+    risk = getattr(state, "risk_regime", "neutral")
+    pullback = getattr(state, "pullback_to_anchor", False)
+
+    if side == "BUY":
+        # Layer 1: pair's OWN HTF must be bullish
+        if htf == "bearish":
+            return False, f"BUY blocked: htf={htf} (pair's trend bearish)"
+        # Layer 2: higher TF must NOT disagree (prevents retracement trap)
+        if htf2 == "bearish":
+            return False, f"BUY blocked: htf2={htf2} (higher TF bearish — retracement trap)"
+        # Layer 3: BTC leader must not disagree
+        if btc == "bearish":
+            return False, "BUY blocked: BTC bearish"
+        # Layer 4: risk regime must not be risk-off
+        if risk == "bearish":
+            return False, "BUY blocked: risk-off regime"
+        # Layer 5: neutral HTF needs pullback confirmation
+        if htf == "neutral" and not pullback:
+            return False, "BUY blocked: neutral HTF needs pullback confirmation"
+        return True, ""
+
+    else:  # SELL
+        if htf == "bullish":
+            return False, f"SELL blocked: htf={htf} (pair's trend bullish)"
+        if htf2 == "bullish":
+            return False, f"SELL blocked: htf2={htf2} (higher TF bullish — retracement trap)"
+        if btc == "bullish":
+            return False, "SELL blocked: BTC bullish"
+        if risk == "bullish":
+            return False, "SELL blocked: risk-on regime"
+        if htf == "neutral" and not pullback:
+            return False, "SELL blocked: neutral HTF needs pullback confirmation"
+        return True, ""
 
 
 # ── v0.0.19: ADX trend strength filter ──────────────────────────────────
@@ -131,10 +160,11 @@ def compute_adx(candles: list, period: int = 14) -> float:
     return dx
 
 
-def adx_allowed(adx_val: float, threshold: float = 20.0) -> tuple[bool, str]:
+def adx_allowed(adx_val: float, threshold: float = 25.0) -> tuple[bool, str]:
     """Block entry if ADX < threshold (choppy → MAXHOLD risk).
 
     ADX < 1.0 (degenerate/near-zero) is treated as unknown and allowed.
+    v0.0.20: threshold raised to 25 (was 20) — stronger trend required.
     """
     if adx_val < 1.0:  # degenerate / can't compute
         return True, ""
@@ -913,9 +943,13 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                                    reason=f"post-SL cooldown {cooldowns[cd_key]} tick(s)")
             continue
 
-        # ── v0.0.19: ADX trend strength gate ────────────────────
-        adx_v = compute_adx(dec, period=14)
-        adx_ok, adx_reason = adx_allowed(adx_v, threshold=20.0)
+        # ── v0.0.19/v0.0.20: ADX trend strength gate (on structural TF) ──
+        # Use the highest structural TF available for meaningful trend strength.
+        # 1m ADX is too noisy; 15m/1h gives reliable trend detection.
+        adx_tf = max(contexts.keys(), key=_tf_minutes) if contexts else dtf
+        adx_candles = cache.get(adx_tf) or dec
+        adx_v = compute_adx(adx_candles, period=14)
+        adx_ok, adx_reason = adx_allowed(adx_v, threshold=25.0)
         if se.decision == "ENTRY" and not adx_ok:
             if decision_sink is not None:
                 decision_sink.append((pair, dtf, profile.name, se.side,
