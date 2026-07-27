@@ -591,6 +591,11 @@ def run() -> None:
     guard = ModeGuard(mode=mode)  # live_exchange=None in paper -> PaperSimExchange
     exchange = guard.exchange_for(None)  # PaperSimExchange in paper; GuardedExchange in live
     monitor = PositionMonitor(exchange, clock=time.time)
+    # v0.0.23 T2: data-driven pair exclusion (doc 45 §3). Persisted to
+    # /data/exclusions.json so it survives Fly restarts. Pairs with rolling
+    # WR < 40% over >=10 trades are skipped until they recover >= 50%.
+    from pair_excluder import PairExcluder
+    excluder = PairExcluder(os.getenv("VAISRAVANA_EXCLUSIONS", "/data/exclusions.json"))
     # seed the monitor with any positions reloaded from the DB at boot
     for key, t in open_trades.items():
         monitor.track(Position(
@@ -866,7 +871,7 @@ def run() -> None:
                              equity=equity, loss_book=realized_loss_today,
                              monitor=monitor, exchange=exchange, guard=guard,
                              klines_cache=klines_cache, decision_sink=cycle_decisions,
-                             cooldowns=cooldowns, pair_atr=pair_atr)
+                                          cooldowns=cooldowns, pair_atr=pair_atr, excluder=excluder)
                 # push the latest price into the sim exchange so the monitor's
                 # mark-price SL/TP/orphan/maxhold logic is real (doc 30 §3, doc 32 L4)
                 _last_decs = klines_cache.get(DECISION_TF) or []
@@ -1076,7 +1081,8 @@ def research_loop(notifier: TelegramNotifier, db_path: str = DB_PATH) -> None:
 def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_trades,
                 registry=None, daily_loss_pct=0.0, feed_frozen=False, equity=1000.0,
                 loss_book=None, monitor=None, exchange=None, guard=None,
-                klines_cache=None, decision_sink=None, cooldowns=None, pair_atr=None):
+                klines_cache=None, decision_sink=None, cooldowns=None, pair_atr=None,
+                excluder=None):
     """Phase 12 — time-sensitive decision tick.
 
     v0.0.19: +cooldowns (post-SL cooldown dict), +pair_atr (volatility-adaptive SL).
@@ -1088,6 +1094,10 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
     cooldowns = cooldowns or {}
     pair_atr = pair_atr or {}
     cache = klines_cache or {}
+    # v0.0.23 T2: skip excluded pairs entirely (no kline fetch, no decision).
+    if excluder is not None and excluder.is_excluded(pair):
+        log.debug("pair %s excluded by rolling WR < floor; skipping tick", pair)
+        return
     for profile in ACTIVE_PROFILES:
         dtf = profile.decision_tf
         dec = cache.get(dtf)
@@ -1146,10 +1156,10 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                      (t.side == "SELL" and bar.h >= t.sl_price)
             if hit_tp:
                 _close(pair, dtf, t.side, t.tp_price, "TP", conn, lc, tel, kill,
-                       notifier, open_trades, loss_book=loss_book)
+                       notifier, open_trades, loss_book=loss_book, excluder=excluder)
             elif hit_sl:
                 _close(pair, dtf, t.side, t.sl_price, "SL", conn, lc, tel, kill,
-                       notifier, open_trades, loss_book=loss_book)
+                       notifier, open_trades, loss_book=loss_book, excluder=excluder)
             continue  # this strategy already has a position; move to the next profile
 
         # kill-switch gate (real daily-loss + feed-health, doc 30 §7) — checked once per tick
@@ -1293,12 +1303,24 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
 
 
 def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,
-           open_trades, loss_book=None):
+           open_trades, loss_book=None, excluder=None):
     t = open_trades.pop((pair, tf, side), None)
     if t is None:
         return
     res = lc.close(t, exit_price=exit_price, close_reason=reason)
     kill.record_close(pair, tf, side, win=bool(res["win"]))
+    # v0.0.23 T2: feed the close into the pair excluder (data-driven).
+    if excluder is not None:
+        changed, action, note = excluder.record_close(pair, bool(res["win"]))
+        if changed and action == "EXCLUDE":
+            notifier.send_message(
+                f"⛔️ **Pair excluded** `{pair}`\n_{note}_\n"
+                f"Rolling WR below 40% over ≥10 trades — skipped until recovery ≥50%."
+            )
+        elif changed and action == "INCLUDE":
+            notifier.send_message(
+                f"✅ **Pair re-included** `{pair}`\n_{note}_"
+            )
     # accumulate realized loss for the daily-loss kill-switch (doc 30 §7)
     if loss_book is not None and res["pnl_usd"] < 0:
         loss_book["usd"] += -res["pnl_usd"]
