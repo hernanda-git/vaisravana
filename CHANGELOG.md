@@ -1,5 +1,9 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.30 (2026-07-27)
+- Approve v0.0.29: DecisPAPER-only audit + /decisions command
+
+
 ## v0.0.29 (2026-07-27)
 - Hentikan kartu 👁 Decisions tiap siklus (spam). Audit tetap di decisions_log. Tambah /decisions untuk tarik data on-demand, kolom side, retensi 1d->7d.
 
