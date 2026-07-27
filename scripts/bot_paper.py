@@ -820,7 +820,7 @@ def run() -> None:
                 if trade.side == "BUY" and unrealized_r >= 0.5 and old_sl < trade.entry_price:
                     new_sl = trade.entry_price * 0.9999  # very slight buffer
                     if monitor is not None:
-                        for pos in monitor.positions:
+                        for pos in monitor.positions.values():
                             if pos.correlation_id == trade.correlation_id:
                                 pos.sl = new_sl
                                 break
@@ -829,7 +829,7 @@ def run() -> None:
                 elif trade.side == "SELL" and unrealized_r >= 0.5 and old_sl > trade.entry_price:
                     new_sl = trade.entry_price * 1.0001
                     if monitor is not None:
-                        for pos in monitor.positions:
+                        for pos in monitor.positions.values():
                             if pos.correlation_id == trade.correlation_id:
                                 pos.sl = new_sl
                                 break
