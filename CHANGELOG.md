@@ -1,5 +1,17 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.19 (2026-07-27) — Full improvement package (ADX, vol-SL, cooldown, trailing stop, per-side threshold)
+- **Tier 1: Directional fix deployed** — v0.0.18 entry_allowed gate (BUY blocked in bearish regime, pullback confirmation) live for the first time with SELL dominance.
+- **Tighter side-bleed floor** (−0.10R from −0.05R) via `SIDE_EXP_FLOOR_R` — catches directional bleed faster.
+- **ADX trend strength filter** — `compute_adx()` + `adx_allowed()` blocks entries when ADX < 20 (weak/choppy trend = MAXHOLD risk). Degenerate data passes through.
+- **Volatility-adaptive SL** — `volatility_scale()` widens SL for high-vol pairs (memes), tightens for low-vol pairs (BTC/ETH). Computed as sqrt(pair_ATR% / median_ATR%). Clamped [0.7, 1.5].
+- **Per-side entry threshold** — BUY requires +0.03 (configurable `SIDE_THRESHOLD_ADJ`) higher threshold in non-bullish regime; SELL requires +0.03 higher in bullish regime. Auto-rebalances entry bias.
+- **Trailing stop at +0.5R** — when a trade reaches +0.5R unrealized, SL is moved to break-even. Converts MAXHOLD expiries into partial wins.
+- **Post-SL cooldown** — after an SL hit on (pair, side), skip the next 3 entries (configurable `SL_COOLDOWN_TICKS`). Prevents revenge re-entry into the same losing setup.
+- **Pair-level sizing** — `PAIR_WEIGHTS` reduces notional by 50% on weak pairs (SOL, WLD, BONK, ETH) and 40% on below-average pairs (TAO, BTC, PUMP) based on live data. Configurable via `VAISRAVANA_WEAK_PAIRS` / `VAISRAVANA_BELOW_AVG_PAIRS`.
+- **+20 tests** (tests/test_phase26_v019.py) — ADX calc, vol scale, per-side gate, cooldown integration → 231 passing.
+- Full evaluation v2 in `docs/EVALUATION_v2.md`.
+
 ## v0.0.18 (2026-07-26) — Directional + expectancy entry gate (the WR fix)
 - **Core win-rate fix** (eval showed 36.7% WR / −1.75R; BUY was 23.7% / −8.78R):
   - New `entry_allowed(state, side, sc, sexp)` gate (pure + TDD, 7 tests):

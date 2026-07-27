@@ -74,9 +74,11 @@ SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", "/data/surface.json")
 # it so the caretaker may re-tune immediately after a fresh start.
 CRON_STATE_PATH = Path(__file__).resolve().parent.parent / ".vaisravana_cron_state.json"
 
-# v0.0.18: expectancy-first side gate (expectancy-driven, NOT an 85% WR gate).
+# v0.0.19: tighter side-bleed floor + per-side threshold adj + post-SL cooldown.
 SIDE_EXP_MIN_SAMPLES = int(os.getenv("VAISRAVANA_SIDE_MIN_SAMPLES", "20"))
-SIDE_EXP_FLOOR_R = float(os.getenv("VAISRAVANA_SIDE_EXP_FLOOR", "-0.05"))
+SIDE_EXP_FLOOR_R = float(os.getenv("VAISRAVANA_SIDE_EXP_FLOOR", "-0.10"))
+SIDE_THRESHOLD_ADJ = float(os.getenv("VAISRAVANA_SIDE_THRESHOLD_ADJ", "0.03"))
+SL_COOLDOWN_TICKS = int(os.getenv("VAISRAVANA_SL_COOLDOWN", "3"))
 
 
 def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
@@ -108,8 +110,60 @@ def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
         return False, "no pullback_to_anchor in neutral regime (chasing extremes)"
     return True, ""
 
+
+# ── v0.0.19: ADX trend strength filter ──────────────────────────────────
+def compute_adx(candles: list, period: int = 14) -> float:
+    """Average Directional Index 0-100. <20 = weak/choppy, 20-40 = trending, >40 = strong.
+    Returns 0 on insufficient data (safe: won't block)."""
+    if len(candles) < period + 1:
+        return 0.0
+    tr = [max(c.h - c.l, abs(c.h - c.c), abs(c.l - c.c)) for c in candles]
+    plus = [(c.h - p.h) if c.h - p.h > p.l - c.l and c.h > p.h else 0.0
+            for c, p in zip(candles[1:], candles[:-1])]
+    minus = [(p.l - c.l) if p.l - c.l > c.h - p.h and p.l > c.l else 0.0
+             for c, p in zip(candles[1:], candles[:-1])]
+    atr14 = sum(tr[-period:]) / period
+    pdm = sum(plus[-period:]) / period
+    ndm = sum(minus[-period:]) / period
+    pdi = pdm / atr14 * 100.0 if atr14 > 0 else 0.0
+    ndi = ndm / atr14 * 100.0 if atr14 > 0 else 0.0
+    dx = abs(pdi - ndi) / (pdi + ndi) * 100.0 if (pdi + ndi) > 0 else 0.0
+    return dx
+
+
+def adx_allowed(adx_val: float, threshold: float = 20.0) -> tuple[bool, str]:
+    """Block entry if ADX < threshold (choppy → MAXHOLD risk).
+
+    ADX < 1.0 (degenerate/near-zero) is treated as unknown and allowed.
+    """
+    if adx_val < 1.0:  # degenerate / can't compute
+        return True, ""
+    if adx_val < threshold:
+        return False, f"ADX {adx_val:.1f} < {threshold} (weak trend — likely MAXHOLD)"
+    return True, ""
+
+
+# ── v0.0.19: volatility-adaptive SL scale ──────────────────────────────
+def volatility_scale(pair: str, atr_pct: float,
+                     all_atr: dict[str, float] | None = None) -> float:
+    """Scale SL mult wider for high-vol pairs, tighter for low-vol pairs.
+
+    sqrt(pair_ATR% / median_ATR%). Clamped [0.7, 1.5]. Falls back to 1.0."""
+    if not all_atr:
+        return 1.0
+    vals = sorted([v for v in all_atr.values() if v > 0])
+    if not vals:
+        return 1.0
+    median = vals[len(vals) // 2]
+    if median <= 0:
+        return 1.0
+    return max(0.7, min(1.5, (atr_pct / median) ** 0.5))
+
+
+# ── v0.0.19: pair-level weight for sizing ──────────────────────────────
+PAIR_WEIGHTS: dict[str, float] = {}
+
 # Phase 12: time-sensitive cadence.
-#   DECISION_TF = the bar we DECIDE + ACT on every cycle (default 1m = jump immediately).
 #   TFS          = structural contexts (default 5m,15m) that feed htf_bias / mtf_aligned,
 #                  making the existing 7-factor engine multi-timeframe WITHOUT engine edits.
 DECISION_TF = os.getenv("VAISRAVANA_DECISION_TF", "1m")
@@ -435,6 +489,23 @@ def run() -> None:
     # closure so it captures every live state holder. Owner-only (chat-gated in the listener).
     control = {"stop": False}
 
+    # v0.0.19: post-SL cooldown tracker {(pair, side): ticks_remaining}
+    cooldowns: dict[tuple[str, str], int] = {}
+    # v0.0.19: pair ATR tracker for volatility-adaptive SL
+    pair_atr: dict[str, float] = {}
+
+    # v0.0.19: pair-level weights — reduce sizing on consistently losing pairs
+    # (calibrated from live data: SOL/WLD/BONK/ETH/TAAO/BTC all <25% WR)
+    PAIR_WEIGHTS.clear()
+    _weak = os.getenv("VAISRAVANA_WEAK_PAIRS", "SOLUSDT,WLDUSDT,1000BONKUSDT,ETHUSDT")
+    for _p in PAIRS:
+        if _p in _weak.split(","):
+            PAIR_WEIGHTS[_p] = 0.5
+    _below = os.getenv("VAISRAVANA_BELOW_AVG_PAIRS", "TAOUSDT,BTCUSDT,PUMPUSDT")
+    for _p in PAIRS:
+        if _p in _below.split(","):
+            PAIR_WEIGHTS[_p] = PAIR_WEIGHTS.get(_p, 0.6)
+
     def clean_state() -> int:
         deleted = db.wipe_db(conn)
         # clear in-memory state so the next loop iteration is a true fresh start
@@ -469,6 +540,9 @@ def run() -> None:
         except Exception as e:
             log.debug("clean confirmation card failed: %s", e)
         log.info("owner /clean: wiped %d rows; all cooldown/loss/kill state cleared", deleted)
+        # v0.0.19: also clear cooldowns + pair_atr
+        cooldowns.clear()
+        pair_atr.clear()
         return deleted
 
     def stop_bot() -> None:
@@ -553,12 +627,18 @@ def run() -> None:
                              daily_loss_pct=daily_loss_pct, feed_frozen=feed_frozen,
                              equity=equity, loss_book=realized_loss_today,
                              monitor=monitor, exchange=exchange, guard=guard,
-                             klines_cache=klines_cache, decision_sink=cycle_decisions)
+                             klines_cache=klines_cache, decision_sink=cycle_decisions,
+                             cooldowns=cooldowns, pair_atr=pair_atr)
                 # push the latest price into the sim exchange so the monitor's
                 # mark-price SL/TP/orphan/maxhold logic is real (doc 30 §3, doc 32 L4)
                 _last_decs = klines_cache.get(DECISION_TF) or []
                 if _last_decs:
                     exchange.set_price(pair, _last_decs[-1].c)
+                # v0.0.19: track per-pair ATR for volatility-adaptive SL
+                _tf1 = klines_cache.get(DECISION_TF)
+                if _tf1 and len(_tf1) >= 14:
+                    tr = [max(c.h - c.l, abs(c.h - c.c), abs(c.l - c.c)) for c in _tf1[-14:]]
+                    pair_atr[pair] = sum(tr) / len(tr) / (_tf1[-1].c or 1) * 100.0
             # drive the position monitor every cycle (real SL/maxhold/orphan handling)
             for ev in monitor.tick():
                 t = open_trades.pop((ev.symbol, ev.tf, ev.side), None)
@@ -572,6 +652,44 @@ def run() -> None:
                                side=ev.side, price=ev.price, status=ev.reason)
                 notifier.notify_close(ev.symbol, DECISION_TF, ev.side, ev.price,
                                       ev.reason, res["r_multiple"], bool(res["win"]))
+                # v0.0.19: post-SL cooldown — skip next N entries on (pair, side) after SL
+                if ev.reason == "SL":
+                    cd_key = (ev.symbol, ev.side)
+                    cooldowns[cd_key] = SL_COOLDOWN_TICKS
+                    log.debug("SL cooldown %s: %d ticks", cd_key, SL_COOLDOWN_TICKS)
+            # v0.0.19: trailing stop — if a trade reaches +0.5R, move SL to break-even
+            for (sym, tf_, side_), trade in list(open_trades.items()):
+                price = getattr(exchange, '_prices', {}).get(sym)
+                if price is None:
+                    continue
+                unrealized_r = (price - trade.entry_price) / abs(trade.entry_price - trade.sl_price) \
+                    if trade.side == "BUY" else (trade.entry_price - price) / abs(trade.entry_price - trade.sl_price)
+                old_sl = trade.sl_price
+                if trade.side == "BUY" and unrealized_r >= 0.5 and old_sl < trade.entry_price:
+                    new_sl = trade.entry_price * 0.9999  # very slight buffer
+                    if monitor is not None:
+                        for pos in monitor.positions:
+                            if pos.correlation_id == trade.correlation_id:
+                                pos.sl = new_sl
+                                break
+                    trade.sl_price = new_sl
+                    log.debug("trailing SL %s %s moved to BE (R=%.2f)", sym, side_, unrealized_r)
+                elif trade.side == "SELL" and unrealized_r >= 0.5 and old_sl > trade.entry_price:
+                    new_sl = trade.entry_price * 1.0001
+                    if monitor is not None:
+                        for pos in monitor.positions:
+                            if pos.correlation_id == trade.correlation_id:
+                                pos.sl = new_sl
+                                break
+                    trade.sl_price = new_sl
+                    log.debug("trailing SL %s %s moved to BE (R=%.2f)", sym, side_, unrealized_r)
+            # v0.0.19: decrement cooldowns each cycle
+            expired = [k for k, v in cooldowns.items() if v <= 1]
+            for k in expired:
+                del cooldowns[k]
+            for k in list(cooldowns.keys()):
+                if k not in expired:
+                    cooldowns[k] -= 1
             # v0.0.16: flush the batched WATCH/SUPPRESS decision card (1 per cycle, not 45).
             if cycle_decisions:
                 lines = []
@@ -720,22 +838,17 @@ def research_loop(notifier: TelegramNotifier, db_path: str = DB_PATH) -> None:
 def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_trades,
                 registry=None, daily_loss_pct=0.0, feed_frozen=False, equity=1000.0,
                 loss_book=None, monitor=None, exchange=None, guard=None,
-                klines_cache=None, decision_sink=None):
+                klines_cache=None, decision_sink=None, cooldowns=None, pair_atr=None):
     """Phase 12 — time-sensitive decision tick.
 
-    Fetches the 1m (DECISION_TF) series + each structural context TF, builds an MTF
-    MarketState on the latest closed 1m bar, decides, and (if actionable + MTF-aligned +
-    spread tight) opens a PAPER position at that close — i.e. jumps immediately.
+    v0.0.19: +cooldowns (post-SL cooldown dict), +pair_atr (volatility-adaptive SL).
 
     `decision_sink` (optional list): when provided, WATCH/near-threshold decisions are
     appended for a single batched per-cycle card instead of one Telegram message per
     pair×strategy per tick (prevents the WATCH spam).
     """
-    # v0.0.16: suppress ENTRY on a side that is systematically bleeding. BUY was running
-    # at ~16% WR / -14R while SELL was positive — so we block the losing side until its
-    # recent expectancy recovers. This is expectancy-driven, not an arbitrary 85% gate.
-    SIDE_EXP_MIN_SAMPLES = int(os.getenv("VAISRAVANA_SIDE_MIN_SAMPLES", "20"))
-    SIDE_EXP_FLOOR_R = float(os.getenv("VAISRAVANA_SIDE_EXP_FLOOR", "-0.05"))
+    cooldowns = cooldowns or {}
+    pair_atr = pair_atr or {}
     cache = klines_cache or {}
     for profile in ACTIVE_PROFILES:
         dtf = profile.decision_tf
@@ -792,6 +905,54 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         # decide under THIS strategy's profile (own entry bar + SL/TP mults)
         se = evaluate_strategy(profile, state, entry_price=dec[i].c,
                                atr=(dec[i].c * state.atr_pct), surface=surface)
+
+        # ── v0.0.19: post-SL cooldown ──────────────────────────
+        cd_key = (pair, se.side)
+        if cooldowns.get(cd_key, 0) > 0:
+            _persist_decisions_log(conn, pair, dtf, state, se, "SKIP",
+                                   reason=f"post-SL cooldown {cooldowns[cd_key]} tick(s)")
+            continue
+
+        # ── v0.0.19: ADX trend strength gate ────────────────────
+        adx_v = compute_adx(dec, period=14)
+        adx_ok, adx_reason = adx_allowed(adx_v, threshold=20.0)
+        if se.decision == "ENTRY" and not adx_ok:
+            if decision_sink is not None:
+                decision_sink.append((pair, dtf, profile.name, se.side,
+                                      round(se.chosen_score, 3), "GATED"))
+            else:
+                notifier.notify_decision(pair, dtf, "SKIP", se.chosen_score,
+                                         se.side, adx_reason)
+            _persist_decisions_log(conn, pair, dtf, state, se, "GATED", reason=adx_reason)
+            continue
+
+        # ── v0.0.19: per-side entry threshold adjustment ────────
+        # BUY needs higher threshold in non-bull regime; SELL needs higher in bull regime.
+        bull = (getattr(state, "htf_bias", "neutral") == "bullish"
+                or getattr(state, "btc_bias", "neutral") == "bullish"
+                or getattr(state, "risk_regime", "neutral") == "bullish")
+        effective_threshold = profile.entry_threshold
+        if se.side == "BUY" and not bull:
+            effective_threshold = min(profile.entry_threshold + SIDE_THRESHOLD_ADJ, 0.92)
+        elif se.side == "SELL" and bull:
+            effective_threshold = min(profile.entry_threshold + SIDE_THRESHOLD_ADJ, 0.92)
+
+        # Re-check effective threshold if the base score was ENTRY
+        if se.decision == "ENTRY" and se.chosen_score < effective_threshold:
+            if decision_sink is not None and se.chosen_score >= profile.entry_threshold - 0.06:
+                decision_sink.append(
+                    (pair, dtf, profile.name, se.side, round(se.chosen_score, 3),
+                     round(effective_threshold, 3)))
+            elif decision_sink is None:
+                # downgrade to WATCH only if score still above watch bar
+                lowered_profile = profile.entry_threshold - 0.06
+                tag = "WATCH" if se.chosen_score >= lowered_profile else "SKIP"
+                notifier.notify_decision(pair, dtf, tag, se.chosen_score,
+                                         se.side, f"side-threshold {effective_threshold}")
+            _persist_decisions_log(conn, pair, dtf, state, se, "GATED",
+                                   reason=f"per-side threshold {effective_threshold}")
+            continue
+
         if se.decision != "ENTRY":
             if se.decision == "WATCH":
                 # v0.0.16: batch WATCHs into ONE per-cycle card (no spam). Only keep
@@ -828,6 +989,13 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         corr_id = f"{pair}-{dtf}-{int(time.time()*1000)}-{se.side}"
         entry = se.entry_price
         sl, tp = se.sl_price, se.tp_price
+        # v0.0.19: volatility-adaptive SL — scale SL wider for high-vol pairs
+        vol_scale = volatility_scale(pair, state.atr_pct, pair_atr)
+        if vol_scale != 1.0:
+            if se.side == "BUY":
+                sl = entry - abs(entry - sl) * vol_scale
+            else:
+                sl = entry + abs(entry - sl) * vol_scale
         # --- hard live boundary: in LIVE mode this raises unless human-approved ---
         if guard is not None:
             guard.assert_entry_allowed(pair, dtf, se.side)
@@ -841,6 +1009,11 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                                 entry=entry, sl_price=sl, leverage=surface.max_leverage,
                                 info=info, max_position_notional_pct=surface.max_position_notional_pct)
             qty = qty if qty > 0 else 1.0
+        # v0.0.19: pair-level weight for sizing (reduce on consistently losing pairs)
+        pair_w = PAIR_WEIGHTS.get(pair, 1.0)
+        if pair_w != 1.0:
+            qty *= pair_w
+            log.debug("pair weight %s=%.2f qty=%.4f", pair, pair_w, qty)
         trade = lc.open(correlation_id=corr_id, pair=pair, tf=dtf,
                         side=se.side, entry_price=entry, size=qty,
                         leverage=surface.max_leverage, sl_price=sl, tp_price=tp,
