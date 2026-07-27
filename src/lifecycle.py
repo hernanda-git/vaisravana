@@ -105,6 +105,7 @@ class TradeLifecycle:
         fill_type: str = "MAKER",
         mfe_r: float | None = None,
         mae_r: float | None = None,
+        fees_usd: float = 0.0,
         notes: str = "",
     ) -> dict:
         """Close the trade, compute PnL/R/win-loss, update rolling win_pct/loss_pct."""
@@ -131,11 +132,11 @@ class TradeLifecycle:
             """UPDATE trade_logs SET
                  ts_fully_closed=?, ts_closed=?, exit_price=?, pnl_usd=?, pnl_pct=?,
                  r_multiple=?, win=?, loss=?, close_reason=?, fill_type=?,
-                 hold_min=?, mfe_r=?, mae_r=?, notes=?
+                 hold_min=?, mfe_r=?, mae_r=?, fees_usd=?, notes=?
                WHERE trade_id=?""",
             (now, now, exit_price, round(pnl_usd, 8), round(pnl_pct, 6),
              round(r_multiple, 4), win, loss, close_reason, fill_type,
-             hold_min, mfe_r, mae_r, notes, trade.trade_id),
+             hold_min, mfe_r, mae_r, round(fees_usd, 8), notes, trade.trade_id),
         )
 
         win_pct, loss_pct = self._update_rolling(trade)

@@ -600,6 +600,27 @@ def run() -> None:
     # (never below watch) when SELL is structurally suppressed (< 25%).
     from side_balancer import SideBalancer
     side_balancer = SideBalancer()
+    # v0.0.24 P0-30: boot R:R floor self-check. Flag any OPEN trade whose realized
+    # R:R < 2:1. Does NOT mutate live positions; alerts + blocks that pair from NEW
+    # entries until repaired. A transient sub-2:1 entry must never ship undetected
+    # (the 2026-07-27 BTCUSDT 1m 1.50:1 case proved the class exists).
+    from rr_scan import scan_open_rr, FLOOR as RR_FLOOR
+    rr_violations = []
+    try:
+        rr_violations = scan_open_rr(conn, RR_FLOOR)
+    except Exception as e:  # never block boot on the scan itself
+        log.debug("R:R floor scan skipped: %s", e)
+    rr_blocked_pairs: set[str] = set()
+    if rr_violations:
+        rr_blocked_pairs = {v["pair"] for v in rr_violations}
+        vlist = ", ".join(f"{v['pair']} {v['tf']} {v['side']} R:R={v['rr']}" for v in rr_violations)
+        log.warning("R:R floor violations among open trades: %s", vlist)
+        try:
+            notifier.send_message(
+                f"⚠️ **Vessavaṇa — R:R floor alert**\nAturan owner 2:1 dilanggar pada posisi terbuka:\n"
+                f"`{vlist}`\nPair diblokir dari entri BARU hingga diperbaiki (posisi tetap).")
+        except Exception:
+            pass
     # seed the monitor with any positions reloaded from the DB at boot
     for key, t in open_trades.items():
         monitor.track(Position(
@@ -876,7 +897,7 @@ def run() -> None:
                              monitor=monitor, exchange=exchange, guard=guard,
                              klines_cache=klines_cache, decision_sink=cycle_decisions,
                              cooldowns=cooldowns, pair_atr=pair_atr, excluder=excluder,
-                             side_balancer=side_balancer)
+                             side_balancer=side_balancer, rr_blocked_pairs=rr_blocked_pairs)
                 # push the latest price into the sim exchange so the monitor's
                 # mark-price SL/TP/orphan/maxhold logic is real (doc 30 §3, doc 32 L4)
                 _last_decs = klines_cache.get(DECISION_TF) or []
@@ -892,7 +913,13 @@ def run() -> None:
                 t = open_trades.pop((ev.symbol, ev.tf, ev.side), None)
                 if t is None:
                     continue
-                res = lc.close(t, exit_price=ev.price, close_reason=ev.reason)
+                # v0.0.24 P0-31: persist realistic fees so net expectancy is real.
+                # Same VIP0 assumption as src/backtest.py: entry maker 0.02%,
+                # exit (SL/MAXHOLD/TP) taker 0.05% on notional.
+                notional = (t.entry_price or 0.0) * (t.size or 0.0)
+                fee_usd = notional * (0.0002 + 0.0005)
+                res = lc.close(t, exit_price=ev.price, close_reason=ev.reason,
+                               fees_usd=fee_usd)
                 kill.record_close(ev.symbol, ev.tf, ev.side, win=bool(res["win"]))
                 if realized_loss_today is not None and res["pnl_usd"] < 0:
                     realized_loss_today["usd"] += -res["pnl_usd"]
@@ -1087,7 +1114,7 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                 registry=None, daily_loss_pct=0.0, feed_frozen=False, equity=1000.0,
                 loss_book=None, monitor=None, exchange=None, guard=None,
                 klines_cache=None, decision_sink=None, cooldowns=None, pair_atr=None,
-                excluder=None, side_balancer=None):
+                excluder=None, side_balancer=None, rr_blocked_pairs=None):
     """Phase 12 — time-sensitive decision tick.
 
     v0.0.19: +cooldowns (post-SL cooldown dict), +pair_atr (volatility-adaptive SL).
@@ -1102,6 +1129,11 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
     # v0.0.23 T2: skip excluded pairs entirely (no kline fetch, no decision).
     if excluder is not None and excluder.is_excluded(pair):
         log.debug("pair %s excluded by rolling WR < floor; skipping tick", pair)
+        return
+    # v0.0.24 P0-30: skip pairs Blocked by the boot R:R-floor self-check (no NEW
+    # entries until the open sub-2:1 position is repaired). Open positions stay.
+    if rr_blocked_pairs and pair in rr_blocked_pairs:
+        log.debug("pair %s R:R-floor blocked (open sub-2:1); skipping new entries", pair)
         return
     for profile in ACTIVE_PROFILES:
         dtf = profile.decision_tf
@@ -1324,13 +1356,15 @@ def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,
         return
     res = lc.close(t, exit_price=exit_price, close_reason=reason)
     kill.record_close(pair, tf, side, win=bool(res["win"]))
-    # v0.0.23 T2: feed the close into the pair excluder (data-driven).
+    # v0.0.23 T2 / v0.0.24 P0-31: feed the close into the pair excluder.
+    # Pass `conn` so the excluder uses NET expectancy$ (after fees) — the real
+    # economic signal — instead of the raw W/L fallback.
     if excluder is not None:
-        changed, action, note = excluder.record_close(pair, bool(res["win"]))
+        changed, action, note = excluder.record_close(pair, bool(res["win"]), conn=conn)
         if changed and action == "EXCLUDE":
             notifier.send_message(
                 f"⛔️ **Pair excluded** `{pair}`\n_{note}_\n"
-                f"Rolling WR below 40% over ≥10 trades — skipped until recovery ≥50%."
+                f"Net expectancy negatif setelah fee — di-skip dari entri baru."
             )
         elif changed and action == "INCLUDE":
             notifier.send_message(

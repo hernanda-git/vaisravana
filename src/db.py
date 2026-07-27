@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS trade_logs (
   win_pct         REAL,
   loss_pct        REAL,
   pnl_usd         REAL, pnl_pct REAL, r_multiple REAL,
+  fees_usd        REAL,
   entry_price     REAL, exit_price REAL,
   size            REAL, leverage REAL,
   sl_price        REAL, tp_price REAL,
@@ -118,8 +119,21 @@ def init_db(db_path: str | Path = "vaisravana.db") -> sqlite3.Connection:
     """
     conn = get_connection(db_path)
     conn.executescript(_SCHEMA_SQL)
+    migrate(conn)  # v0.0.24 P0-31: add fees_usd to existing DBs (safe ALTER)
     conn.commit()
     return conn
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Forward migrations that are safe for an already-existing DB.
+
+    v0.0.24 P0-31: add `fees_usd` column to trade_logs if missing (ALTER TABLE
+    ADD COLUMN is non-destructive; existing rows default to NULL then COALESCE 0).
+    """
+    try:
+        conn.execute("ALTER TABLE trade_logs ADD COLUMN fees_usd REAL")
+    except sqlite3.OperationalError:
+        pass  # already present
 
 
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:

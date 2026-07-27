@@ -1,5 +1,30 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.24 (2026-07-27) — Robustness P0: R:R lock + net-expectancy + SELL maturity
+Repo-only commit (NO auto-deploy — human-gated cutover per plan).
+
+- **P0-30 R:R floor lock** (`src/rr_scan.py`): boot self-check scans ALL open
+  trades; any with realized R:R < 2:1 is flagged, alerted to Telegram, and the
+  offending pair is blocked from NEW entries until repaired (open positions stay).
+  `assert_rr_floor` gives a hard fail-loud path. Regression test mirrors the
+  2026-07-27 BTCUSDT 1m 1.50:1 transient.
+- **P0-31 net-expectancy re-base** (fixes F1 R-distortion): `evaluation.evaluate`
+  now computes NET expectancy$ (after fees) and adds a `net_expectancy` pass
+  guard; new `net_pair_ranking()` ranks pairs by net$ so tight-SL pairs can no
+  longer inflate a naive R-multiple ranking. `PairExcluder` now excludes on NET
+  expectancy$ (real money) when a DB is available, keeps the W/L fallback for
+  standalone use. `trade_logs.fees_usd` column added via a safe `ALTER TABLE`
+  migration; the live bot now persists realistic VIP0 fees (entry 0.02% / exit
+  0.05%) on every close so net expectancy is real, not assumed.
+- **P0-32 SELL maturity gate** (`src/side_maturity.py`): a side is MATURE only
+  after `min_trades` (50) samples AND a stable Wilson 95% CI (half-width < 0.20).
+  Immature SELL (only ~12 trades / <3h live) is excluded from promotion /
+  exclusion math and labeled IMMATURE — no false "SELL broken/works" conclusions.
+- Docs: `REVIEW-ROBUSTNESS-2026-07-27.md`, `PLAN-ROBUSTNESS.md`.
+- Tests: `test_phase30_rr_floor_lock.py`, `test_phase31_net_expectancy.py`,
+  `test_phase32_side_maturity.py` (+ lifecycle/close fee path). Full suite
+  **273 passed**.
+
 ## v0.0.23 (2026-07-27) — Honor owner R:R≥2:1 mandate + de-bleed + SELL balance
 - **T1 R:R≥2:1 (CRITICAL):** `ParameterSurface` now enforces a HARD floor validator `tp_atr_mult/sl_atr_mult ≥ 2.0`. Active PAPER default 1.5:1 → **2:1** (break-even WR 40%→33.3%). Owner mandate "1 win recovers 2 losses" is now in code, not by hope.
 - **T2 pair de-bleed:** new `PairExcluder` skips pairs with rolling WR < 40% over ≥10 trades; re-includes on recovery ≥50%. Persisted to `/data/exclusions.json`. Measured: removes 6 bleed pairs, lifts aggregate WR **46%→58%** with zero logic risk.
