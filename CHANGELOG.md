@@ -1,5 +1,11 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.23 (PLANNED) — Honor owner R:R≥2:1 mandate + de-bleed + SELL balance
+- **T1:** Enforce `tp_atr_mult / sl_atr_mult ≥ 2.0` in config (hard floor validator). Active profile R:R 1.5:1 → 2:1; break-even WR 40% → 33.3%.
+- **T2:** Auto-exclude pairs with rolling WR < 40% (≥10 trades); re-include on recovery >50%. Measured: removes 6 bleed pairs, lifts aggregate WR 46.3% → 58.1% with zero logic risk.
+- **T3:** Per-side SELL score offset + min 25% SELL share (un-suppress the 10:1 BUY:SELL asymmetry).
+- Docs: `45-comprehensive-strategy-review.md` (full factor inventory, measured) + `PLAN_v0.0.23.md`.
+
 ## v0.0.22 (2026-07-27) — Regime-adaptive weights + Telegram commands + SMC gate
 - **Regime-adaptive weights** — ADX-driven factor mix:
   - ADX < 25 (range): trend 30→20%, momentum 20→15%, structure 15→25%, liquidity 10→15%
