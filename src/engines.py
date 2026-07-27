@@ -156,13 +156,46 @@ def atr_score(s: MarketState) -> float:
 
 
 def funding_oi_score(s: MarketState) -> float:
-    """Funding/OI 5% (doc 03/28-D). Healthy funding/ADL -> 1.0; extreme -> caution."""
+    """Funding/OI 5%. Funding healthy + ADL calm = 1.0."""
     sc = 1.0
     if not s.funding_ok:
         sc -= 0.4
     if s.adl_rank >= 4:
         sc -= 0.3
     return _clamp(sc)
+
+
+def adaptive_weights(adx_val: float, regime: str, base: dict | None = None) -> dict:
+    """v0.0.22: ADX-driven regime-adaptive factor weights.
+
+    In range/choppy markets (ADX < 25): reduce trend+momentum, boost structure+liquidity.
+    In strong trends (ADX > 40): maximize trend+momentum.
+    Default: standard weights (30/20/15/15/10/5/5).
+    """
+    weights = dict(base or {
+        "trend": 0.30, "momentum": 0.20, "volume": 0.15,
+        "structure": 0.15, "liquidity": 0.10, "atr": 0.05, "funding_oi": 0.05,
+    })
+    if adx_val < 25 and regime in ("range", "high_vol", "chop"):
+        # Choppy → SMC dominates. Structure+Liquidity = 40%.
+        weights["trend"] = 0.20
+        weights["momentum"] = 0.15
+        weights["structure"] = 0.25
+        weights["liquidity"] = 0.15
+        weights["volume"] = 0.15
+        weights["atr"] = 0.05
+        weights["funding_oi"] = 0.05
+    elif adx_val > 40 and regime in ("trending_bull", "trending_bear", "breakout"):
+        # Strong trend → EMA-based signals dominate. Trend+Momentum = 60%.
+        weights["trend"] = 0.35
+        weights["momentum"] = 0.25
+        weights["structure"] = 0.10
+        weights["liquidity"] = 0.05
+        weights["volume"] = 0.15
+        weights["atr"] = 0.05
+        weights["funding_oi"] = 0.05
+    # Σ should be 1.0 — minor rounding handled by the caller
+    return weights
 
 
 def crossasset_score(s: MarketState) -> float:

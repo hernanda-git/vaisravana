@@ -121,9 +121,9 @@ def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
         # Layer 4: risk regime must not be risk-off
         if risk == "bearish":
             return False, "BUY blocked: risk-off regime"
-        # Layer 5: neutral HTF needs pullback confirmation
-        if htf == "neutral" and not pullback:
-            return False, "BUY blocked: neutral HTF needs pullback confirmation"
+        # Layer 5: neutral HTF needs pullback XOR liquidity sweep
+        if htf == "neutral" and not pullback and not getattr(state, "liq_sweep", False):
+            return False, "BUY blocked: neutral HTF needs pullback or liquidity sweep"
         return True, ""
 
     else:  # SELL
@@ -135,8 +135,8 @@ def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
             return False, "SELL blocked: BTC bullish"
         if risk == "bullish":
             return False, "SELL blocked: risk-on regime"
-        if htf == "neutral" and not pullback:
-            return False, "SELL blocked: neutral HTF needs pullback confirmation"
+        if htf == "neutral" and not pullback and not getattr(state, "liq_sweep", False):
+            return False, "SELL blocked: neutral HTF needs pullback or liquidity sweep"
         return True, ""
 
 
@@ -719,13 +719,99 @@ def run() -> None:
 
     def _dispatch(text: str, _raw: str) -> None:
         cmd = text.split()[0].split("@")[0].lower()
+        args = text.split()[1:] if len(text.split()) > 1 else []
         if cmd == "/clean":
             clean_state()
         elif cmd == "/stop":
             stop_bot()
         elif cmd == "/health":
             health_report()
+        elif cmd == "/positions":
+            _send_positions()
+        elif cmd == "/pairs":
+            _send_pairs()
+        elif cmd == "/config":
+            _send_config()
+        elif cmd == "/exclude":
+            _toggle_pair(args[0].upper(), exclude=True) if args else \
+                notifier.send_message("Usage: /exclude BTCUSDT")
+        elif cmd == "/include":
+            _toggle_pair(args[0].upper(), exclude=False) if args else \
+                notifier.send_message("Usage: /include BTCUSDT")
+        elif cmd == "/reload":
+            nonlocal surface
+            try:
+                from surface import SurfaceLoader
+                surface = SurfaceLoader().load()
+                notifier.send_message("✅ Config reloaded from disk")
+            except Exception as e:
+                notifier.send_message(f"❌ Reload failed: {e}")
         # unknown commands are ignored
+
+    def _send_positions() -> None:
+        """Send list of open positions."""
+        rows = conn.execute(
+            "SELECT pair, tf, side, entry_price, sl_price, tp_price, ts_opened "
+            "FROM trade_logs WHERE ts_closed IS NULL"
+        ).fetchall()
+        if not rows:
+            notifier.send_message("📭 No open positions.")
+            return
+        lines = ["<b>📊 Open Positions</b>"]
+        for r in rows:
+            side_icon = "🟢" if r["side"] == "BUY" else "🔴"
+            hold = (datetime.now(timezone.utc) - datetime.fromisoformat(r["ts_opened"])).total_seconds() / 60
+            lines.append(
+                f"{side_icon} {r['pair']} | {r['side']} | {r['tf']}\n"
+                f"   Entry: {r['entry_price']:.2f} | SL: {r['sl_price']:.2f} | TP: {r['tp_price']:.2f}\n"
+                f"   Hold: {hold:.0f}m"
+            )
+        notifier.send_message("\n".join(lines[:10]))  # max 10 positions per msg
+
+    def _send_pairs() -> None:
+        """Send active pairs with weights."""
+        lines = ["<b>📋 Active Pairs</b>"]
+        for p in PAIRS:
+            w = PAIR_WEIGHTS.get(p, 1.0)
+            buy_wr = conn.execute(
+                "SELECT ROUND(100.0*SUM(win)/COUNT(*),1) FROM trade_logs "
+                "WHERE pair=? AND side='BUY' AND ts_closed IS NOT NULL"
+            ).fetchone()[0] or 0
+            sell_wr = conn.execute(
+                "SELECT ROUND(100.0*SUM(win)/COUNT(*),1) FROM trade_logs "
+                "WHERE pair=? AND side='SELL' AND ts_closed IS NOT NULL"
+            ).fetchone()[0] or 0
+            icon = "✅" if w >= 1.0 else "⚠️" if w >= 0.6 else "🔻"
+            lines.append(f"{icon} {p} w={w:.2f}  🟢{buy_wr}%  🔴{sell_wr}%")
+        notifier.send_message("\n".join(lines))
+
+    def _send_config() -> None:
+        """Send current surface parameters."""
+        from config import Weights
+        w = surface.weights
+        lines = [
+            "<b>⚙️ Config</b>",
+            f"Entry threshold: {surface.entry_threshold}",
+            f"Watch threshold: {surface.watch_threshold}",
+            f"Weights: T={w.trend} M={w.momentum} V={w.volume} S={w.structure} "
+            f"L={w.liquidity} A={w.atr} F={w.funding_oi}",
+            f"Daily loss limit: {surface.daily_loss_limit_pct}%",
+            f"Max concurrently open: {surface.max_concurrent_trades}",
+            f"Mode: {mode.upper()} | Pairs: {len(PAIRS)}",
+        ]
+        notifier.send_message("\n".join(lines))
+
+    def _toggle_pair(pair: str, exclude: bool) -> None:
+        """Exclude or include a trading pair."""
+        if pair not in PAIRS:
+            notifier.send_message(f"❌ Unknown pair: {pair}")
+            return
+        action = "excluded from" if exclude else "included in"
+        PAIR_WEIGHTS[pair] = 0.0 if exclude else 1.0
+        notifier.send_message(f"✅ {pair} {action} trading. Weight: {PAIR_WEIGHTS[pair]:.1f}")
+
+    # v0.0.22: add necessary imports for command handlers
+    from datetime import datetime, timezone
 
     # start the Telegram command listener (polls getUpdates in a daemon thread)
     _cmd_listener = TelegramCommandListener(
@@ -1010,13 +1096,20 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         contexts = {tf: cache[tf] for tf in TFS
                     if tf in cache and tf != dtf and len(cache[tf]) >= 50}
         i = len(dec) - 1
+
+        # ── v0.0.22: compute ADX once ────────────────────────
+        adx_tf = max(contexts.keys(), key=_tf_minutes) if contexts else dtf
+        adx_candles = cache.get(adx_tf) or dec
+        adx_v = compute_adx(adx_candles, period=14)
+        adx_ok, adx_reason = adx_allowed(adx_v, threshold=25.0)
+
+        # ── state + context ───────────────────────────────────
         ema_fast, ema_slow = PROFILE_EMA.get(profile.name, (20, 50))
         state = build_state_mtf(pair, dec, i, contexts, ema_fast=ema_fast, ema_slow=ema_slow)
         try:
             ctx = build_context_for(pair, dec, i, contexts)
             state.btc_bias = ctx.btc_bias
             state.btc_ret = ctx.btc_ret
-            state.dominance_delta = ctx.dominance_delta
             state.risk_regime = ctx.risk_regime
             state.alt_rs_btc = ctx.alt_rs_btc
             state.alt_breadth = ctx.alt_breadth
@@ -1025,12 +1118,25 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             state.htf_bias2 = ctx.htf_bias
             state.mtf_confluence = ctx.mtf_confluence
             state.pullback_to_anchor = ctx.pullback_to_anchor
-        except Exception as e:  # best-effort: never let context fetch break the loop
-            log.debug("context build failed for %s/%s: %s", pair, dtf, e)
+        except Exception as exc:
+            log.debug("context build failed for %s/%s: %s", pair, dtf, exc)
 
-        # manage an existing position for THIS strategy (keyed by its decision_tf)
-        existing = open_trades.get((pair, dtf, None)) if None in (
-            open_trades.get((pair, dtf, "BUY")), open_trades.get((pair, dtf, "SELL"))) else None
+        # ── v0.0.22: adaptive weights ────────────────────────
+        from engines import adaptive_weights
+
+        if surface is not None:
+            aw = adaptive_weights(adx_v, state.regime)
+            surface.weights.trend = aw["trend"]
+            surface.weights.momentum = aw["momentum"]
+            surface.weights.volume = aw["volume"]
+            surface.weights.structure = aw["structure"]
+            surface.weights.liquidity = aw["liquidity"]
+            surface.weights.atr = aw["atr"]
+            surface.weights.funding_oi = aw["funding_oi"]
+
+        se = evaluate_strategy(profile, state, entry_price=dec[i].c,
+                               atr=(dec[i].c * state.atr_pct),
+                               surface=surface)
         t = open_trades.get((pair, dtf, "BUY")) or open_trades.get((pair, dtf, "SELL"))
         if t is not None:
             bar = dec[i]
@@ -1066,13 +1172,6 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                                    reason=f"post-SL cooldown {cooldowns[cd_key]} tick(s)")
             continue
 
-        # ── v0.0.19/v0.0.20: ADX trend strength gate (on structural TF) ──
-        # Use the highest structural TF available for meaningful trend strength.
-        # 1m ADX is too noisy; 15m/1h gives reliable trend detection.
-        adx_tf = max(contexts.keys(), key=_tf_minutes) if contexts else dtf
-        adx_candles = cache.get(adx_tf) or dec
-        adx_v = compute_adx(adx_candles, period=14)
-        adx_ok, adx_reason = adx_allowed(adx_v, threshold=25.0)
         if se.decision == "ENTRY" and not adx_ok:
             if decision_sink is not None:
                 decision_sink.append((pair, dtf, profile.name, se.side,

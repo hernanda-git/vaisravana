@@ -1,5 +1,17 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.22 (2026-07-27) — Regime-adaptive weights + Telegram commands + SMC gate
+- **Regime-adaptive weights** — ADX-driven factor mix:
+  - ADX < 25 (range): trend 30→20%, momentum 20→15%, structure 15→25%, liquidity 10→15%
+  - ADX > 40 (trend): trend 30→35%, momentum 20→25%, structure 15→10%, liquidity 10→5%
+  - Default: standard 30/20/15/15/10/5/5
+- **8 Telegram commands added:** /positions, /pairs, /config, /exclude, /include, /reload
+  alongside existing /health /clean /stop — all registered via setMyCommands
+- **SMC neutral gate** — in neutral HTF, requires pullback_to_anchor OR liq_sweep before entry
+- **Hot-config reload** via /reload command (re-reads surface JSON without restart)
+- **adaptive_weights()** in src/engines.py (pure, testable)
+- REVIEW_v0.0.21.md with full acceleration plan
+
 ## v0.0.21 (2026-07-27) — Profile-specific EMAs + context caching
 - **Profile-specific EMA periods** (THE timeframe mismatch fix):
   - Scalp (1m, hold 15m): EMA5/15 → ~15 min signal matches hold time

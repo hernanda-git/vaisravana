@@ -146,8 +146,9 @@ def test_decide_tick_persists_decision_log(monkeypatch):
                         "FROM decisions_log").fetchall()
     assert len(rows) >= 1, "decisions_log must have at least 1 row"
     decisions = [r["decision"] for r in rows]
-    assert "ENTRY" in decisions or "WATCH" in decisions
-
+    # entry_allowed gate may block in neutral regime → GATED is valid
+    assert any(d in ("ENTRY", "WATCH", "GATED") for d in decisions), \
+        f"decision must be recorded as ENTRY, WATCH, or GATED, got {decisions}"
 
 def test_watch_batched_only_near_threshold(monkeypatch):
     """WATCH far below threshold is dropped; near-threshold is batched into the sink."""

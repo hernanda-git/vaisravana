@@ -53,14 +53,17 @@ class TelegramNotifier:
         self._chat_dead: bool = False   # sticky: permanent chat error (e.g. not a member)
 
     def register_commands(self) -> bool:
-        """Register bot commands with Telegram so / shows a hint list.
-
-        Calls setMyCommands on startup. Returns True if successful.
-        """
+        """Register bot commands with Telegram so / shows a hint list."""
         commands = [
             {"command": "health", "description": "Bot status, WR, open positions"},
             {"command": "clean", "description": "Wipe DB, reset all state (owner only)"},
             {"command": "stop", "description": "Graceful shutdown after current cycle"},
+            {"command": "positions", "description": "List open positions with PnL"},
+            {"command": "pairs", "description": "Active pairs, weights, WR per side"},
+            {"command": "config", "description": "Show current surface parameters"},
+            {"command": "exclude", "description": "[PAIR] Remove a pair from trading"},
+            {"command": "include", "description": "[PAIR] Re-add a pair to trading"},
+            {"command": "reload", "description": "Reload config from disk"},
         ]
         try:
             r = httpx.post(
@@ -70,7 +73,7 @@ class TelegramNotifier:
             )
             ok = r.status_code == 200 and r.json().get("ok")
             if ok:
-                self.send_message("ℹ️ Commands registered: /health /clean /stop")
+                self.send_message("ℹ️ Commands registered: /health /clean /stop /positions /pairs /config /exclude /include")
             return ok
         except Exception:
             return False
