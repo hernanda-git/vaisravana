@@ -1,5 +1,9 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.0.31 (2026-07-27)
+- Approve v0.0.29: PAPER-only decision audit + /decisions command (gate fix)
+
+
 ## v0.0.30 (2026-07-27)
 - Approve v0.0.29: DecisPAPER-only audit + /decisions command
 
