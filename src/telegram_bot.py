@@ -198,19 +198,19 @@ class TelegramNotifier:
 
     def notify_health_check(self, version: str, region: str, open_n: int,
                             feed_ok: bool = True, notes: str = "") -> bool:
-        """Explicit on-deploy + periodic heartbeat (doc 43). Lets the owner confirm the
-        bot is alive and healthy without waiting for a trade to happen."""
-        status = "sehat ✅" if feed_ok else "feed bermasalah ⚠️"
+        """Heartbeat card with systems status (startup)."""
+        status = "✅ SEHAT" if feed_ok else "⚠️ FEED BERMASALAH"
         text = (
-            f"💓 <b>Health Check</b> · <code>v{html_escape(version)}</code>\n"
-            f"\n"
-            f"<b>Status</b>  : {status}\n"
-            f"<b>Region</b>  : <code>{html_escape(region)}</code>\n"
-            f"<b>Posisi</b>  : <code>{open_n}</code> terbuka\n"
-            f"<b>Waktu</b>   : <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>\n"
+            f"<b>Vessavaṇa</b> · <code>v{html_escape(version)}</code>\n"
+            f"┌─ {'─'*30}\n"
+            f"│ {status}\n"
+            f"│ 🌏 Region    │ <code>{html_escape(region)}</code>\n"
+            f"│ 📂 Positions │ <code>{open_n}</code> open\n"
+            f"│ 🕐 Uptime    │ <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>\n"
+            f"└─ {'─'*30}\n"
         )
         if notes:
-            text += f"\n<i>{html_escape(notes)}</i>"
+            text += f"<i>{html_escape(notes)}</i>"
         return self.send_message(text)
 
     def notify_deploy(self, version: str, changelog: str) -> bool:
@@ -277,53 +277,99 @@ class TelegramNotifier:
 
     def notify_health(self, version: str, summary: dict, db_stats: dict | None = None,
                       control_state: str = "RUNNING") -> bool:
-        """Full `/health` card: win rates (overall/side/tf/pair), all trades, summary.
-
-        `summary` comes from db.trade_summary(); `db_stats` from db.db_stats()."""
+        """Elegant `/health` report card with WR, positions, side/pair breakdown."""
         o = summary.get("overall", {})
-        lines = [f"🩺 <b>Vessavaṇa Health — v{html_escape(version)}</b> · <code>{control_state}</code>", ""]
-        # overall
-        lines.append(f"<b>Overall</b>: WR <code>{o.get('win_rate_pct',0):.1f}%</code> "
-                     f"({o.get('wins',0)}W/{o.get('losses',0)}L · {o.get('n',0)} closed) · "
-                     f"Exp <code>{o.get('expectancy_r',0):+.3f}R</code> · PnL <code>${o.get('pnl_usd',0):.2f}</code>")
+        wr = o.get("win_rate_pct", 0.0)
+        exp_r = o.get("expectancy_r", 0.0)
+        pnl = o.get("pnl_usd", 0.0)
+        n_closed = o.get("n", 0)
+        n_wins = o.get("wins", 0)
+        n_losses = o.get("losses", 0)
+
+        status_icon = "🟢" if wr >= 50 and exp_r > 0 else "🟡" if wr >= 35 else "🔴"
+        pnl_icon = "📈" if pnl >= 0 else "📉"
+
+        lines = [
+            f"<b>Vessavaṇa</b> · <code>v{html_escape(version)}</code> "
+            f"<code>{control_state}</code>",
+            "",
+            f"{status_icon} <b>Performance</b>",
+            f"   Win Rate │ <code>{wr:.1f}%</code> "
+            f"({n_wins}W/{n_losses}L · {n_closed} closed)",
+            f"   Expectancy │ <code>{exp_r:+.3f}R</code>",
+            f"   {pnl_icon} P&L │ <code>${pnl:+.2f}</code>",
+            "",
+        ]
+
         # by side
         by_side = summary.get("by_side", {})
         if by_side:
-            s = " · ".join(
-                f"{k}: <code>{v['win_rate_pct']:.1f}%</code> (Exp {v['expectancy_r']:+.3f}R)"
-                for k, v in by_side.items())
-            lines.append(f"<b>By side</b>: {s}")
-        # by tf
+            lines.append("<b>By Side</b>")
+            for side in ("BUY", "SELL"):
+                v = by_side.get(side, {})
+                if v.get("n", 0):
+                    swr = v.get("win_rate_pct", 0)
+                    sexp = v.get("expectancy_r", 0)
+                    sw = v.get("wins", 0)
+                    sl = v.get("losses", 0)
+                    icon = "🟢" if side == "BUY" else "🔴"
+                    bar = "▓" * min(20, max(1, int(swr / 5))) + "░" * max(0, 20 - min(20, int(swr / 5)))
+                    lines.append(
+                        f"   {icon} {side:4s} <code>{swr:5.1f}%</code> "
+                        f"{bar} "
+                        f"Exp <code>{sexp:+.3f}R</code> · {sw}W/{sl}L"
+                    )
+            lines.append("")
+
+        # by TF
         by_tf = summary.get("by_tf", {})
         if by_tf:
-            t = " · ".join(
-                f"{k}: <code>{v['win_rate_pct']:.1f}%</code> (Exp {v['expectancy_r']:+.3f}R)"
-                for k, v in sorted(by_tf.items()))
-            lines.append(f"<b>By tf</b>: {t}")
+            tfs = " · ".join(
+                f"<code>{k} {v['win_rate_pct']:.1f}%</code>"
+                for k, v in sorted(by_tf.items()) if v.get("n", 0)
+            )
+            lines.append(f"<b>By TF</b>   │ {tfs}")
+            lines.append("")
+
         # worst/best pairs
         by_pair = summary.get("by_pair", {})
         if by_pair:
             ranked = sorted(by_pair.items(), key=lambda kv: kv[1]["expectancy_r"])
-            worst = " · ".join(f"{p} {b['expectancy_r']:+.2f}R" for p, b in ranked[:3])
-            best = " · ".join(f"{p} {b['expectancy_r']:+.2f}R" for p, b in ranked[-3:][::-1])
-            lines.append(f"<b>Worst</b>: {worst}")
-            lines.append(f"<b>Best</b>: {best}")
-        # counts
-        lines.append(f"<b>Open</b>: <code>{summary.get('open_count',0)}</code> · "
-                     f"<b>Closed</b>: <code>{summary.get('closed_count',0)}</code>")
-        # DB
+            worst_items = ranked[:3]
+            best_items = ranked[-3:][::-1] if len(ranked) >= 3 else ranked[::-1]
+            lines.append("<b>Pairs</b>")
+            lines.append("   📉 Worst │ " + " · ".join(
+                f"<code>{p} {b['expectancy_r']:+.2f}R</code>" for p, b in worst_items if b.get("n", 0)))
+            lines.append("   📈 Best  │ " + " · ".join(
+                f"<code>{p} {b['expectancy_r']:+.2f}R</code>" for p, b in best_items if b.get("n", 0)))
+            lines.append("")
+
+        # positions summary
+        open_n = summary.get("open_count", 0)
+        closed_n = summary.get("closed_count", 0)
+        lines.append(f"<b>Positions</b>")
+        lines.append(f"   📂 Open  │ <code>{open_n}</code>")
+        lines.append(f"   ✅ Closed │ <code>{closed_n}</code>")
         if db_stats:
-            lines.append(f"<b>DB</b>: <code>{html_escape(db_stats.get('size_human','0 B'))}</code> · "
-                         f"<code>{db_stats.get('total_rows',0)}</code> rows")
-        # recent
+            lines.append(f"   💾 DB    │ <code>{html_escape(db_stats.get('size_human','0 B'))}</code> · "
+                         f"<code>{db_stats.get('total_rows',0):,}</code> rows")
+        lines.append("")
+
+        # recent trades
         recent = summary.get("recent", [])
         if recent:
-            lines.append("")
-            lines.append("<b>Recent trades:</b>")
+            lines.append(f"<b>Recent Trades</b>")
             for r in recent[:8]:
                 sign = "🟢" if r["win"] else "🔴"
-                lines.append(f"{sign} {r['pair']} {r['side']} {r['tf']} "
-                             f"R<code>{r['r_multiple']:+.2f}</code> · {r['close_reason']}")
+                reason_icon = {"TP": "🎯", "SL": "🛑", "MAXHOLD": "⏱", "TRAILING": "🏁"}.get(
+                    r.get("close_reason", ""), "❓")
+                lines.append(
+                    f"   {sign}{reason_icon} <code>{r['pair']:8s}</code> "
+                    f"{'🟢BUY' if r.get('side')=='BUY' else '🔴SEL' if r.get('side')=='SELL' else '??':5s}  "
+                    f"R <code>{r.get('r_multiple',0):+5.2f}</code>  "
+                    f"<code>{r.get('close_reason','?')}</code>"
+                )
+
         return self.send_message("\n".join(lines))
 
 
