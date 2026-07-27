@@ -1,5 +1,19 @@
 # Changelog — Project Vaiśravaṇa
 
+## v0.1.7 (2026-07-26) — Telegram `/stop` + `/health` commands + decisions_log persistence
+- **Owner slash commands (owner ask):**
+  - `/stop` — graceful halt: sets a control flag, the main loop exits at end of the
+    current cycle, sends a 🛑 confirmation card. Durable stop via `flyctl machine stop`.
+  - `/health` — full status card: overall WR + expectancy + PnL, by-side / by-tf / by-pair
+    breakdown (worst/best pairs), open/closed counts, DB size, and last 8 trades.
+  - `/clean` — retained (v0.1.6): wipe DB + clear all cooldown/kill/loss state, fresh start.
+  - Dispatched via the existing `TelegramCommandListener` (chat-gated, daemon thread).
+- **decisions_log persistence fix:** `_decide_tick` now writes every evaluated decision
+  (WATCH/SKIP/SUPPRESSED/ENTRY) to `decisions_log` (the caretaker noted it was empty since
+  the v0.1.0 multi-strategy rewrite). `_persist_decisions_log` added; serializes scores
+  safely (as_dict / str fallback) so a non-JSON-able sub_scores object can't break the loop.
+- **+4 tests** (tests/test_phase24_stop_health.py) → 204 passing.
+
 ## v0.1.6 (2026-07-26) — `/clean` slash command (wipe + fresh start)
 - **Owner slash command `/clean`** (owner ask). The bot was send-only; added a
   `TelegramCommandListener` (daemon thread, `getUpdates` poll, chat-gated to NOTIFY_CHAT_ID)

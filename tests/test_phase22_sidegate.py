@@ -60,10 +60,13 @@ def _seed_closed(conn, side, r_values):
 
 
 def _entry(side, score=0.9):
+    class _Sub:
+        def as_dict(self):
+            return {"trend": 0.3, "momentum": 0.2}
     return StrategyEntry(
         strategy="scalping", decision_tf="1m", side=side, decision="ENTRY",
         chosen_score=score, confidence_pct=70.0, entry_price=100.0,
-        sl_price=99.0, tp_price=101.5, rr=1.5)
+        sl_price=99.0, tp_price=101.5, rr=1.5, sub_scores=_Sub())
 
 
 def _watch(score):
@@ -111,6 +114,39 @@ def test_bleeding_side_is_suppressed(monkeypatch):
 
     assert not fill_calls, "bleeding BUY side must NOT open"
     assert any(row[5] == "SUPPRESSED" for row in sink)
+
+
+def test_decide_tick_persists_decision_log(monkeypatch):
+    """_decide_tick must write ENTRY outcomes to decisions_log (v0.1.7 fix)."""
+    from config import default_surface
+    db_path = Path(tempfile.mkdtemp()) / "t.db"
+    conn = init_db(db_path)
+
+    sink = []
+    fill_calls = []
+    lc = TradeLifecycle(conn)
+    surface = default_surface()
+    candles = _candles()
+    klines_cache = {"1m": candles}
+
+    class _Tel:
+        def exec_event(self, *a, **k):
+            return None
+        def health(self, *a, **k):
+            return None
+
+    monkeypatch.setattr(b, "evaluate_strategy", lambda *a, **k: _entry("BUY", 0.9))
+
+    b._decide_tick(
+        "BTCUSDT", conn, surface, lc, _Tel(), _fake_kill(), None,
+        _fake_notifier(fill_calls),
+        {}, registry=None, decision_sink=sink, klines_cache=klines_cache)
+
+    rows = conn.execute("SELECT decision, pair, tf, total_score, confidence_pct "
+                        "FROM decisions_log").fetchall()
+    assert len(rows) >= 1, "decisions_log must have at least 1 row"
+    decisions = [r["decision"] for r in rows]
+    assert "ENTRY" in decisions or "WATCH" in decisions
 
 
 def test_watch_batched_only_near_threshold(monkeypatch):

@@ -274,3 +274,75 @@ def wipe_db(conn: sqlite3.Connection) -> int:
     except sqlite3.Error:
         return total
     return total
+
+
+def _wr_block(conn, where: str = "", params: tuple = ()) -> dict:
+    """Win-rate + expectancy block over a filtered subset of closed trades."""
+    sql = (
+        "SELECT COUNT(*), COALESCE(SUM(win),0), "
+        "COALESCE(SUM(r_multiple),0.0), COALESCE(SUM(pnl_usd),0.0) "
+        f"FROM trade_logs WHERE ts_fully_closed IS NOT NULL {where}"
+    )
+    n, wins, sum_r, sum_pnl = conn.execute(sql, params).fetchone()
+    n = int(n)
+    wins = int(wins)
+    losses = max(0, n - wins)
+    return {
+        "n": n,
+        "wins": wins,
+        "losses": losses,
+        "win_rate_pct": round(100.0 * wins / n, 1) if n else 0.0,
+        "expectancy_r": round(sum_r / n, 3) if n else 0.0,
+        "pnl_usd": round(sum_pnl, 2),
+    }
+
+
+def trade_summary(conn: sqlite3.Connection, recent_n: int = 10) -> dict:
+    """Full owner-facing trade summary for the `/health` command.
+
+    - overall: portfolio-wide WR + expectancy across all closed trades
+    - by_side / by_tf / by_pair: WR + expectancy breakdown (only non-empty groups)
+    - open_count: currently open positions
+    - closed_count: total closed trades
+    - recent: last `recent_n` closed trades (pair, side, r_multiple, reason, win)
+    """
+    overall = _wr_block(conn)
+    by_side = {}
+    for side in ("BUY", "SELL"):
+        blk = _wr_block(conn, "AND side=?", (side,))
+        if blk["n"]:
+            by_side[side] = blk
+    by_tf = {}
+    for (tf,) in conn.execute("SELECT DISTINCT tf FROM trade_logs WHERE tf IS NOT NULL").fetchall():
+        blk = _wr_block(conn, "AND tf=?", (tf,))
+        if blk["n"]:
+            by_tf[tf] = blk
+    by_pair = {}
+    for (pair,) in conn.execute("SELECT DISTINCT pair FROM trade_logs WHERE pair IS NOT NULL").fetchall():
+        blk = _wr_block(conn, "AND pair=?", (pair,))
+        if blk["n"]:
+            by_pair[pair] = blk
+    open_count = conn.execute(
+        "SELECT COUNT(*) FROM trade_logs WHERE ts_fully_closed IS NULL").fetchone()[0]
+    closed_count = conn.execute(
+        "SELECT COUNT(*) FROM trade_logs WHERE ts_fully_closed IS NOT NULL").fetchone()[0]
+    recent = []
+    for r in conn.execute(
+        "SELECT pair, side, r_multiple, close_reason, win, tf FROM trade_logs "
+        "WHERE ts_fully_closed IS NOT NULL ORDER BY ts_fully_closed DESC LIMIT ?",
+        (recent_n,)
+    ).fetchall():
+        recent.append({
+            "pair": r["pair"], "side": r["side"], "tf": r["tf"],
+            "r_multiple": round(r["r_multiple"], 3) if r["r_multiple"] is not None else 0.0,
+            "close_reason": r["close_reason"], "win": bool(r["win"]),
+        })
+    return {
+        "overall": overall,
+        "by_side": by_side,
+        "by_tf": by_tf,
+        "by_pair": by_pair,
+        "open_count": open_count,
+        "closed_count": closed_count,
+        "recent": recent,
+    }

@@ -1,1 +1,1 @@
-{"last_deploy_ts": 1785106680, "last_improvement": "v0.1.5: losing-side expectancy gate (BUY -5.65R suppressed) + WATCH spam batched", "consecutive_healthy": 2, "last_change_tick": 5, "excluded_pairs": []}
+{"last_deploy_ts": 1785107603, "last_improvement": "v0.1.6: /clean slash command + side-bleed gate", "consecutive_healthy": 3, "last_change_tick": 6, "excluded_pairs": []}

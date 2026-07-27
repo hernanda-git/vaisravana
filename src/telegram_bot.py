@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -248,7 +249,57 @@ class TelegramNotifier:
         return self.send_message(text)
 
 
-import threading  # noqa: E402  (kept local to avoid disturbing the top import block)
+    def notify_health(self, version: str, summary: dict, db_stats: dict | None = None,
+                      control_state: str = "RUNNING") -> bool:
+        """Full `/health` card: win rates (overall/side/tf/pair), all trades, summary.
+
+        `summary` comes from db.trade_summary(); `db_stats` from db.db_stats()."""
+        o = summary.get("overall", {})
+        lines = [f"🩺 <b>Vessavaṇa Health — v{html_escape(version)}</b> · <code>{control_state}</code>", ""]
+        # overall
+        lines.append(f"<b>Overall</b>: WR <code>{o.get('win_rate_pct',0):.1f}%</code> "
+                     f"({o.get('wins',0)}W/{o.get('losses',0)}L · {o.get('n',0)} closed) · "
+                     f"Exp <code>{o.get('expectancy_r',0):+.3f}R</code> · PnL <code>${o.get('pnl_usd',0):.2f}</code>")
+        # by side
+        by_side = summary.get("by_side", {})
+        if by_side:
+            s = " · ".join(
+                f"{k}: <code>{v['win_rate_pct']:.1f}%</code> (Exp {v['expectancy_r']:+.3f}R)"
+                for k, v in by_side.items())
+            lines.append(f"<b>By side</b>: {s}")
+        # by tf
+        by_tf = summary.get("by_tf", {})
+        if by_tf:
+            t = " · ".join(
+                f"{k}: <code>{v['win_rate_pct']:.1f}%</code> (Exp {v['expectancy_r']:+.3f}R)"
+                for k, v in sorted(by_tf.items()))
+            lines.append(f"<b>By tf</b>: {t}")
+        # worst/best pairs
+        by_pair = summary.get("by_pair", {})
+        if by_pair:
+            ranked = sorted(by_pair.items(), key=lambda kv: kv[1]["expectancy_r"])
+            worst = " · ".join(f"{p} {b['expectancy_r']:+.2f}R" for p, b in ranked[:3])
+            best = " · ".join(f"{p} {b['expectancy_r']:+.2f}R" for p, b in ranked[-3:][::-1])
+            lines.append(f"<b>Worst</b>: {worst}")
+            lines.append(f"<b>Best</b>: {best}")
+        # counts
+        lines.append(f"<b>Open</b>: <code>{summary.get('open_count',0)}</code> · "
+                     f"<b>Closed</b>: <code>{summary.get('closed_count',0)}</code>")
+        # DB
+        if db_stats:
+            lines.append(f"<b>DB</b>: <code>{html_escape(db_stats.get('size_human','0 B'))}</code> · "
+                         f"<code>{db_stats.get('total_rows',0)}</code> rows")
+        # recent
+        recent = summary.get("recent", [])
+        if recent:
+            lines.append("")
+            lines.append("<b>Recent trades:</b>")
+            for r in recent[:8]:
+                sign = "🟢" if r["win"] else "🔴"
+                lines.append(f"{sign} {r['pair']} {r['side']} {r['tf']} "
+                             f"R<code>{r['r_multiple']:+.2f}</code> · {r['close_reason']}")
+        return self.send_message("\n".join(lines))
+
 
 
 class TelegramCommandListener:

@@ -19,9 +19,11 @@ import os
 import sys
 import time
 import json
+import uuid
 import logging
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -275,6 +277,48 @@ def reload_open_trades(conn: sqlite3.Connection, lc: TradeLifecycle) -> dict:
     return lc.get_open_positions()
 
 
+def _persist_decisions_log(conn, pair, tf, state, se, decision, reason=None):
+    """Persist one evaluated decision (WATCH/SKIP/SUPPRESSED/ENTRY) to decisions_log.
+
+    Best-effort: a logging failure must never break the decision loop. Reads regime/scores
+    from the MarketState and score/confidence from the StrategyEntry via getattr fallbacks
+    so it stays robust to schema drift.
+    """
+    try:
+        import json as _json
+        scores = getattr(state, "scores", None) or getattr(se, "sub_scores", None)
+        if scores is not None:
+            # scores may be a dataclass/object with as_dict(), or a dict — serialize safely
+            if hasattr(scores, "as_dict"):
+                scores_json = _json.dumps(scores.as_dict())
+            else:
+                try:
+                    scores_json = _json.dumps(scores)
+                except TypeError:
+                    scores_json = _json.dumps(str(scores))
+        else:
+            scores_json = None
+        conn.execute(
+            "INSERT INTO decisions_log "
+            "(id, correlation_id, ts, pair, tf, regime, scores_json, total_score, "
+            "confidence_pct, decision, gate_a_pass, gate_b_pass, reason, config_ver) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (f"{pair}-{tf}-{int(time.time()*1000)}-{getattr(se,'side','')}",
+             f"{pair}-{tf}",
+             datetime.now(timezone.utc).isoformat(),
+             pair, tf,
+             getattr(state, "regime", None),
+             scores_json,
+             getattr(se, "chosen_score", None),
+             getattr(se, "confidence_pct", None),
+             decision, 1, 1, reason,
+             vmod.read_version()),
+        )
+        conn.commit()
+    except Exception as e:  # never let a log write break the loop
+        log.debug("persist decisions_log failed: %s", e)
+
+
 def run() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -354,6 +398,8 @@ def run() -> None:
     # v0.1.6 /owner: `/clean` slash command — wipe DB + clear ALL cooldown/loss/kill state
     # and start the trading loop fresh (blank win rate, no open positions). Defined as a
     # closure so it captures every live state holder. Owner-only (chat-gated in the listener).
+    control = {"stop": False}
+
     def clean_state() -> int:
         deleted = db.wipe_db(conn)
         # clear in-memory state so the next loop iteration is a true fresh start
@@ -390,17 +436,51 @@ def run() -> None:
         log.info("owner /clean: wiped %d rows; all cooldown/loss/kill state cleared", deleted)
         return deleted
 
+    def stop_bot() -> None:
+        control["stop"] = True
+        try:
+            notifier.send_message("🛑 <b>Vessavaṇa dihentikan</b> (owner /stop).\n"
+                                   "Loop akan berhenti di akhir siklus ini. Kirim /clean atau "
+                                   "restart machine untuk memulai lagi.")
+
+        except Exception as e:
+            log.debug("stop card failed: %s", e)
+        log.info("owner /stop requested")
+
+    def health_report() -> None:
+        try:
+            summary = db.trade_summary(conn, recent_n=10)
+            stats = db_stats(conn, DB_PATH) if "db_stats" in globals() else None
+            notifier.notify_health(vmod.read_version(), summary, stats,
+                                    control_state="STOPPED" if control["stop"] else "RUNNING")
+        except Exception as e:
+            log.exception("health report failed: %s", e)
+
+    def _dispatch(text: str, _raw: str) -> None:
+        cmd = text.split()[0].split("@")[0].lower()
+        if cmd == "/clean":
+            clean_state()
+        elif cmd == "/stop":
+            stop_bot()
+        elif cmd == "/health":
+            health_report()
+        # unknown commands are ignored
+
     # start the Telegram command listener (polls getUpdates in a daemon thread)
     _cmd_listener = TelegramCommandListener(
-        notifier, lambda text, _: clean_state() if text.split()[0].split("@")[0].lower() == "/clean" else None,
+        notifier, _dispatch,
         poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID", ""),
     )
     _cmd_listener.start()
-    log.info("Telegram /clean listener started")
+    log.info("Telegram /clean /stop /health listener started")
 
     while True:
         try:
-            # roll daily-loss window at UTC midnight
+            # owner /stop: graceful halt at the end of the current cycle
+            if control["stop"]:
+                log.info("owner /stop: loop exiting")
+                notifier.send_message("✅ Vessavaṇa berhenti. (process exit)")
+                break
             today = time.strftime("%Y-%m-%d")
             if realized_loss_today["day"] != today:
                 realized_loss_today = {"usd": 0.0, "day": today}
@@ -688,6 +768,8 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                 elif decision_sink is None:
                     notifier.notify_decision(pair, dtf, "WATCH", se.chosen_score,
                                              se.side, f"{profile.name} below threshold")
+            # v0.1.7: persist every evaluated decision (WATCH or SKIP) to decisions_log
+            _persist_decisions_log(conn, pair, dtf, state, se, se.decision)
             continue
 
         # v0.1.6: side-bleed gate — block ENTRY on a side whose recent expectancy is
@@ -703,7 +785,12 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             else:
                 notifier.notify_decision(pair, dtf, "SKIP", se.chosen_score,
                                          se.side, reason)
+            # v0.1.7: persist the SUPPRESSED decision (side-bleed gate blocked)
+            _persist_decisions_log(conn, pair, dtf, state, se, "SUPPRESSED", reason=reason)
             continue
+
+        # v0.1.7: persist ENTRY decision to decisions_log
+        _persist_decisions_log(conn, pair, dtf, state, se, "ENTRY")
 
         corr_id = f"{pair}-{dtf}-{int(time.time()*1000)}-{se.side}"
         entry = se.entry_price
