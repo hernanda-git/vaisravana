@@ -45,3 +45,29 @@ Balance $8.96 after 5 min. Fee $0.418.
 Next iteration targets: (a) ATR-scaled TP (2xATR) so target is reachable,
 (b) verify BUY fires on up-tapes (directional balance), (c) log live bias
 distribution for evidence.
+
+---
+
+## ITER-2 — robust bias (trend+momentum) + ATR-scaled TP
+- Hypothesis: `read_bias` used `ema_15m vs price` which is laggy — ema_15m
+  stayed above price during up-moves, so the bot SELLed into rallies (all
+  closes were losses in iter-0/1). Fix: mtf_ema = 0.6*trend(ema_15m vs
+  ema_1h) + 0.4*momentum(price vs ema_15m). And TP should be volatility-scaled
+  (2xATR, floor 1.2x risk) so winners are reachable, not a fixed 1.5R the tape
+  never travels.
+- Change: bias.py mtf_ema blend; manager.open TP = max(1%, 2xATR) scaled.
+- Test: run7, fresh $10, MAX_WAVE_AGE_S=600 (env; default now 900).
+- Evidence: 9 opens / 20 trades in 7min, fee only **$0.05** (vs $0.57/6min
+  baseline run6, $0.418/5min run5). Bot is now highly selective — fee drag
+  dropped ~10x. 0 closes in the 11min window because MAX_WAVE_AGE_S did not
+  trigger (env-not-loaded suspicion; default lowered to 900 for next run).
+- Verdict: KEEP. Selectivity + fee efficiency are the single biggest survival
+  win so far. ATR TP not yet exercised (no closes) — validate in iter-3.
+
+## Loop state (end of iter-2)
+- Baseline win rate still 0%, but fee drag is now tiny, so survival is no
+  longer fee-limited — it is expectancy-limited. The lever is now direction
+  + TP quality, not frequency.
+- Next iter (3): confirm MAX_WAVE_AGE_S fires (default 900), observe close
+  reasons + live bias.direction distribution (are BUYs firing on up-tapes?),
+  and tune TP/SL R-ratio so a hit winner pays >1R consistently.

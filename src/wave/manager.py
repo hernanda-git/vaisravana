@@ -172,9 +172,14 @@ class WaveManager:
             wave.anchor = ctx.price + buffer
         wave.sl_price = wave.anchor
 
-        # Take-profit at +1.5R (realistic, lets the account actually grow).
+        # Take-profit scaled to volatility (reachable target, not fixed 1.5R
+        # that the tape can never travel). Aim for ~2x ATR so winners actually
+        # get hit in normal conditions; floor at 1.0% so calm pairs still pay.
+        atr = _atr_pct(ctx, candidate.tf)
+        tp_dist = max(ctx.price * 0.010, ctx.price * atr * 2.0)
         risk = abs(wave.entry_price - wave.anchor)
-        tp_dist = risk * 1.5
+        # Keep R consistent: TP distance should be >= risk so a win pays >1R.
+        tp_dist = max(tp_dist, risk * 1.2)
         wave.tp_price = (wave.entry_price + tp_dist) if candidate.side == "BUY" \
             else (wave.entry_price - tp_dist)
 
