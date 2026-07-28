@@ -367,9 +367,6 @@ async def notify_wave_open(notifier, wave, wallet=None, open_fee=0.0):
         tp = getattr(wave, "tp_price", None)
         tp_s = f"{tp:.6f}" if tp else "—"
         bal = wallet.balance if wallet else 0.0
-        unreal = getattr(wallet, "unrealized", 0.0) if wallet else 0.0
-        used = getattr(wallet, "used", 0.0) if wallet else 0.0
-        equity = bal + unreal
         lines = [
             f"🌊 <b>WAVE OPEN</b> {side_icon} {wave.side} {wave.pair}",
             f"<code>  Entry : {wave.entry_price:.6f}</code>",
@@ -379,10 +376,7 @@ async def notify_wave_open(notifier, wave, wallet=None, open_fee=0.0):
             f"<code>  Lev   : {lev}x   Margin: {margin:.4f}$</code>",
             f"<code>  Conf  : {wave.confidence:.2f}</code>",
             f"<code>  Fee   : -{open_fee:.4f}$</code>",
-            f"",
-            f"<b>Balance</b>",
-            f"<code>  equity : {equity:.4f}$   used: {used:.4f}$</code>",
-            f"<code>  unreal : {unreal:+.4f}$  realized: {bal:+.4f}$</code>",
+            f"<code>  Balance: {bal:.4f}$</code>",
         ]
         notifier.send_message("\n".join(lines))
     except Exception:
@@ -398,18 +392,13 @@ async def notify_wave_close(notifier, wave, wallet=None, econ=None):
         net = econ.get("net", 0.0)
         pnl_icon = "🟢" if net >= 0 else "🔴"
         bal = wallet.balance if wallet else 0.0
-        unreal = getattr(wallet, "unrealized", 0.0) if wallet else 0.0
-        used = getattr(wallet, "used", 0.0) if wallet else 0.0
-        equity = bal + unreal
         lines = [
             f"🌊 <b>WAVE CLOSE</b> {side_icon} {wave.side} {wave.pair}",
             f"<code>  Exit  : {wave.live_r:+.2f}R  ({wave.close_reason})</code>",
-            f"<code>  {pnl_icon} Net : {net:+.4f}$</code>",
+            f"<code>  Gross  : {wave.live_r * (wave.notional or 0) * (abs(wave.entry_price - wave.anchor)/wave.entry_price if wave.entry_price else 0):+.4f}$</code>",
             f"<code>  Fee   : -{close_fee:.4f}$</code>",
-            f"",
-            f"<b>Balance</b>",
-            f"<code>  equity : {equity:.4f}$   used: {used:.4f}$</code>",
-            f"<code>  unreal : {unreal:+.4f}$  realized: {bal:+.4f}$</code>",
+            f"<code>  {pnl_icon} Net : {net:+.4f}$</code>",
+            f"<code>  Balance: {bal:.4f}$</code>",
         ]
         notifier.send_message("\n".join(lines))
     except Exception:

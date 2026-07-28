@@ -132,3 +132,41 @@ distribution for evidence.
   Prefer (b) — it directly converts "was up, gave it back" into a smaller loss
   or scratch, which is the expert rule already partially present (reversal at
   peak>=0.5). Lower the reversal threshold to peak>=0.2.
+
+---
+
+## ITER-4 — momentum-primary bias (0.8 momentum / 0.2 trend) — REJECTED, reverted
+- Hypothesis: iter-3 found ema_1h frozen between hourly candles => trend
+  (ema_15m vs ema_1h) constantly bearish => 100% SELL. Fix attempted: make live
+  momentum (price vs ema_15m) primary at 0.8 weight, demote trend to 0.2.
+- Change: bias.py `mtf_ema = 0.8*momentum + 0.2*trend` (commit 73202fd).
+- Test: run9, fresh $10, ~16 min measured window.
+- Evidence: 18 opens (2x baseline rate), 100% bias=bullish — the bot flipped
+  from all-SELL to all-BUY, chasing per-tick noise. 9 closes, all max_age,
+  R range -0.22..0.00, ZERO positive R. Balance $8.92, fees $0.964 (~4x the
+  $0.246 of run8 baseline which finished $9.76 in the same window). Momentum
+  vs ema_15m is a noise follower: price sits above a lagging fast EMA during
+  micro-pumps, so every pair looks bullish, entries are late, and the wave
+  mean-reverts before max_age.
+- Verdict: REJECT. Worse on every risk-adjusted metric (balance, fee drag,
+  R distribution, selectivity). Reverted bias.py to iter-3 formula
+  (0.6*trend + 0.4*momentum). Post-revert sanity run shows mixed direction
+  again (BUY AAVE where ema15>ema1h, SELLs elsewhere) — trend is not
+  permanently-bearish, it only pins bearish when ema_1h is stale ABOVE price.
+- Lesson: do not demote the slow signal to fix staleness; fix the staleness.
+  Raising momentum weight trades one degenerate regime (all-SELL) for a worse
+  one (all-BUY + 2x churn + 4x fees).
+
+## Loop state (end of iter-4)
+- Baseline remains iter-3 code: run8 = $9.76 @16min, fee $0.246, R -0.04..+0.08.
+- Standing questions (updated):
+  1. FIX EMA_1H STALENESS AT THE SOURCE (next iter, small + safe): update
+     ema_1h from the live 15m closes (e.g. maintain a rolling 1h EMA computed
+     from 15m candle closes with the equivalent alpha), or refresh ema_1h via
+     REST kline poll every 15m instead of hourly. Then trend flips correctly
+     without touching the 0.6/0.4 blend.
+  2. TP still never hit (all closes max_age). After direction is fixed,
+     evaluate whether 2xATR TP is reachable within 900s, or scale max_age
+     with ATR/timeframe.
+  3. Keep fee drag at ~run8 levels; any change that doubles opens/min is
+     suspect regardless of direction.
