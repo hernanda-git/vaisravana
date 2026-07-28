@@ -320,11 +320,13 @@ class WaveManager:
             # so the wave is given room to reach the full TP first
             return WaveAction(type="CLOSE", reason="tp05_hit", wave=wave, price=tick.price)
 
-        # 0b. Reversal exit: the wave was meaningfully in profit (peak >= 0.5R)
-        # but has now given it all back (live_r < 0). Close to lock the small
-        # loss instead of riding to the full SL. This is the expert "don't let a
-        # winner become a loser" rule.
-        if wave.peak_r >= 0.5 and wave.live_r < 0:
+        # 0b. Reversal exit: the wave was in profit (peak >= 0.2R) but has now
+        # given it all back (live_r < 0). Close to lock the scratch/small loss
+        # instead of riding to full SL or decaying into a negative max_age
+        # close. iter-6: threshold lowered 0.5 -> 0.2 because run10 showed
+        # winners peaking at +0.17..+0.23R then bleeding back to -R by max_age;
+        # a 0.2 peak-lock would have banked those round-trips near scratch.
+        if wave.peak_r >= 0.2 and wave.live_r < 0:
             return WaveAction(type="CLOSE", reason="reversal", wave=wave, price=tick.price)
 
         # 1. Anchor hit (price crossed SL)

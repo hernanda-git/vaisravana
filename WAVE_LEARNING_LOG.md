@@ -211,3 +211,41 @@ distribution for evidence.
      a peak-lock exit would have banked 4 winners this run.
   3. Keep watching bias mix across tapes — verify SELLs still fire on genuine
      down-tapes now that trend is live (no new degenerate regime).
+
+---
+
+## ITER-6 — momentum-fade / peak-lock exit (reversal threshold 0.5R -> 0.2R)
+- Hypothesis (standing Q2 of iter-5): run10 winners peaked +0.17..+0.23R then
+  decayed to negative max_age closes. Lowering the reversal exit trigger from
+  peak_r>=0.5 to peak_r>=0.2 (still requires live_r<0) converts "was up, gave
+  it back" into a scratch instead of a slow bleed. Pure loss-protection
+  tightening: cannot increase risk, frequency, or fees.
+- Change: manager.py evaluate_exit rule 0b: `peak_r >= 0.2 and live_r < 0`.
+- Test: run11, fresh $10, ~18 min window, build --no-cache + force-recreate.
+- Evidence: 18 opens (same rate as run10 baseline), 9 closes, all max_age.
+  R: +0.24, +0.20, +0.08 and six small negatives (-0.03..-0.18); avg R ≈ 0.00
+  (run10: -0.07). Balance $9.13, fees $0.858 (run10: $9.18 / $0.722 — same
+  ballpark; pre-fee PnL ≈ -0.013, essentially flat). The new exit did NOT
+  fire this window: no loser ever peaked >=0.2R (loser peaks 0.02-0.10), and
+  the two waves that peaked >=0.2R (0.28, 0.57) never went negative, closing
+  POSITIVE at max_age. So the rule stayed dormant exactly when it should.
+- Verdict: KEEP. Strictly-safer exit rule, zero regression on risk-adjusted
+  metrics, avg R improved (tape-driven), no crash, no >30% loss. It is armed
+  for the tape pattern run10 exhibited; needs a window with 0.2R-peaking
+  losers to show its payoff.
+
+## Loop state (end of iter-6)
+- Baseline for iter-7 comparison: run11 = $9.13 @18min, fee $0.858, 18 opens,
+  3/9 positive, all closes max_age, avg R ≈ 0.00.
+- Standing questions (updated):
+  1. FEE DRAG / SELECTIVITY is now the dominant loss source (pre-fee PnL flat,
+     ~$0.85/18min in fees). Highest-leverage next step: raise the entry
+     confidence gate (opens fired at conf 0.11-0.25 this run) or per-pair
+     cooldown after a max_age close (INJ re-opened 4x in 40s). Target <=0.5
+     opens/min WITHOUT freezing signals.
+  2. EXIT: still 0 tp_hit. Waves that peak 0.3-0.6R drift back to +0.2 by
+     max_age (PUMP peaked 0.57 closed 0.20). Consider tighter trail after 0.5R
+     (SL to +0.4R) or TP 1.5xATR so winners bank before decay.
+  3. Watch for the first real reversal-exit fire (peak>=0.2 then <0) and
+     verify it books near-scratch, not a whipsaw churn (if it churns, raise
+     back toward 0.3).
