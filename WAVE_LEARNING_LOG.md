@@ -170,3 +170,44 @@ distribution for evidence.
      with ATR/timeframe.
   3. Keep fee drag at ~run8 levels; any change that doubles opens/min is
      suspect regardless of direction.
+
+---
+
+## ITER-5 — fix ema_1h staleness at the source (deterministic EMA from REST 1h fetch)
+- Hypothesis (standing Q1): ema_1h is frozen between hourly closes because
+  on_kline only applies is_final 1h candles, AND the REST 1h poll marks every
+  fetched kline is_final=True, so ema_update() re-applies the same 20 closes
+  every ~60s (drift/pin). Fix the staleness at the source, do NOT touch the
+  0.6 trend / 0.4 momentum blend (lesson of iter-4).
+- Change: engine.py — added _ema_from_closes(); after each REST 1h kline
+  fetch, ctx.ema_1h is deterministically recomputed as EMA(20) over the 20
+  fetched 1h closes (incl. the in-progress candle). Trend is now always live.
+- Test: run10, fresh $10, ~18 min window.
+- Evidence: 18 opens, direction now MIXED and coherent per pair (BUY where
+  ema15>ema1h e.g. ENA/PENGU/SOL/TAO, SELL where ema15<ema1h e.g. WLD/PUMP/
+  PEPE) — both degenerate regimes (run8 all-SELL, run9 all-BUY) are gone.
+  9 closes, all max_age; R spread -0.46..+0.23 with 4/9 POSITIVE closes
+  (+0.17..+0.23) — first run with real >0.15R winners. avg R ≈ -0.07.
+  Balance $9.18, fees $0.722. Pre-fee PnL ≈ -0.10 (near break-even); the
+  drawdown is FEE DRAG from ~2x open rate vs run8 (livelier trend => gate
+  passes more often), not from bad direction.
+- Verdict: KEEP. This is a data-integrity fix for a confirmed frozen-signal
+  bug; reverting to a broken ema_1h because one 18-min window scored better
+  would be overfitting to a single tape (run8's all-SELL only worked because
+  the tape was down). Win quality improved (first +0.2R closes). The
+  regression is isolated to open FREQUENCY, which is the next, separate lever.
+
+## Loop state (end of iter-5)
+- Baseline for iter-6 comparison: run10 = $9.18 @18min, fee $0.722, 18 opens,
+  4/9 closes positive, all closes max_age.
+- Standing questions (updated):
+  1. FEE DRAG / SELECTIVITY: live ema_1h doubled opens/min vs run8. Restore
+     run8-level selectivity WITHOUT re-freezing the signal: raise the
+     confidence/strength gate (opens fired at conf 0.25-0.38) or add a
+     per-pair cooldown after max_age close. Target <= ~0.5 opens/min.
+  2. EXIT: still 100% max_age closes; TP never hit. Convert "was up, gave it
+     back" into scratch: momentum-fade exit (peak_r>=0.2 and live_r<=0 =>
+     close), or lower TP to 1.5xATR. Winners reached +0.2R then decayed —
+     a peak-lock exit would have banked 4 winners this run.
+  3. Keep watching bias mix across tapes — verify SELLs still fire on genuine
+     down-tapes now that trend is live (no new degenerate regime).

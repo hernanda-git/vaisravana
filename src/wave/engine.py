@@ -24,6 +24,22 @@ from wave.db import init_wave_db
 
 log = logging.getLogger(__name__)
 
+
+def _ema_from_closes(closes: list, period: int) -> float:
+    """Deterministic EMA over a fixed window of closes (iter-5).
+
+    Seeded from the first close, then standard EMA recursion. Used to
+    recompute ema_1h from each REST 1h kline fetch so it tracks the tape
+    instead of pinning between hourly closes (staleness fix at the source).
+    """
+    if not closes:
+        return 0.0
+    alpha = 2.0 / (period + 1.0)
+    ema = float(closes[0])
+    for c in closes[1:]:
+        ema = alpha * float(c) + (1.0 - alpha) * ema
+    return ema
+
 # ── Shared state for Telegram commands ────────────────────────────────────
 wave_state: dict = {"waves": [], "closed_today": []}
 # engine.py's run_wave_engine writes active waves + closed waves here on each
@@ -319,6 +335,19 @@ async def _rest_poll_loop(pairs, on_tick, on_kline, ctx_store, manager, wave_sta
                             k["tf"] = "1h"
                             k["s"] = pair
                             await on_kline("1h", k)
+                        # iter-5: fix ema_1h staleness at the source.
+                        # REST klines are all marked is_final, so the on_kline
+                        # ema_update path re-applies the same closes each fetch
+                        # and ema_1h drifts/pins instead of tracking the tape.
+                        # Deterministically recompute EMA(20) over the fetched
+                        # 1h closes (incl. the in-progress candle) so trend in
+                        # read_bias() is always live. Blend weights untouched.
+                        if kl1h:
+                            ctx1 = ctx_store.get(pair)
+                            if ctx1 is not None:
+                                ctx1.ema_1h = _ema_from_closes(
+                                    [float(k["close"]) for k in kl1h], 20
+                                )
                     except Exception:
                         pass
 
