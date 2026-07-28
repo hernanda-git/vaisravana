@@ -30,6 +30,30 @@ MAX_WAVE_AGE_S = int(os.getenv("VAISRAVANA_MAX_WAVE_AGE_S", "1800"))  # force-cl
 
 # ── Actions ───────────────────────────────────────────────────────────────────
 
+def _atr_pct(ctx: TickContext, tf: str = "15m", period: int = 14) -> float:
+    """True range as a fraction of price, from the cached klines.
+
+    Used to size the stop so normal oscillation does not clip the wave.
+    Falls back to 1.0% if klines are unavailable.
+    """
+    kl = ctx.klines.get(tf, [])
+    if len(kl) < period + 1:
+        return 0.010
+    trs = []
+    for i in range(1, min(period, len(kl))):
+        h = float(kl[i].get("high", kl[i].get("h", 0)))
+        l = float(kl[i].get("low", kl[i].get("l", 0)))
+        c0 = float(kl[i - 1].get("close", kl[i - 1].get("c", 0)))
+        if h and l:
+            tr = max(h - l, abs(h - c0), abs(l - c0))
+            trs.append(tr)
+    if not trs:
+        return 0.010
+    atr = sum(trs) / len(trs)
+    price = float(kl[-1].get("close", kl[-1].get("c", ctx.price))) or ctx.price or 1.0
+    return atr / price if price else 0.010
+
+
 
 @dataclass
 class WaveAction:
@@ -137,9 +161,11 @@ class WaveManager:
             last_tick_ts=time.time(),
         )
 
-        # Anchor (SL): entry ± 1.0% buffer (wider than 0.5% so
-        # choppy/sideways tape doesn't stop you out before the wave forms).
-        buffer = ctx.price * 0.010
+        # Anchor (SL): ATR-based, at least 1.0% so choppy tape oscillation
+        # does not stop you out before the wave forms. Wider than a fixed
+        # 1% SL so normal noise does not clip every SELL in a sideways/up tape.
+        atr = _atr_pct(ctx, candidate.tf)
+        buffer = max(ctx.price * 0.010, ctx.price * atr * 1.8)
         if candidate.side == "BUY":
             wave.anchor = ctx.price - buffer
         else:
@@ -287,6 +313,13 @@ class WaveManager:
             # bank a partial at +0.9R only when very close to the 1.5R TP,
             # so the wave is given room to reach the full TP first
             return WaveAction(type="CLOSE", reason="tp05_hit", wave=wave, price=tick.price)
+
+        # 0b. Reversal exit: the wave was meaningfully in profit (peak >= 0.5R)
+        # but has now given it all back (live_r < 0). Close to lock the small
+        # loss instead of riding to the full SL. This is the expert "don't let a
+        # winner become a loser" rule.
+        if wave.peak_r >= 0.5 and wave.live_r < 0:
+            return WaveAction(type="CLOSE", reason="reversal", wave=wave, price=tick.price)
 
         # 1. Anchor hit (price crossed SL)
         if wave.side == "BUY" and tick.price <= wave.sl_price:
