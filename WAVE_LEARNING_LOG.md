@@ -71,3 +71,32 @@ distribution for evidence.
 - Next iter (3): confirm MAX_WAVE_AGE_S fires (default 900), observe close
   reasons + live bias.direction distribution (are BUYs firing on up-tapes?),
   and tune TP/SL R-ratio so a hit winner pays >1R consistently.
+
+---
+
+## ITER-3 — directional diagnostic (ema15/ema1h on every open)
+- Hypothesis: the bot is ~88-100% SELL. Either the tape is genuinely bearish,
+  or ema_15m/ema_1h feed is stale and biases every wave to SELL. Need evidence.
+- Change: log `bias.direction(strength)` + `ema15` + `ema1h` on every WAVE OPEN.
+- Test: run8, fresh $10, MAX_WAVE_AGE_S=900 (default).
+- Evidence: 9 opens ALL `bias=bearish`. On opens, ema_1h is FROZEN
+  (e.g. INJUSDT ema1h=4.68687 constant across 9 ticks) while ema_15m tracks
+  price (4.639xx). So `trend = ema_15m < ema_1h` => ALWAYS bearish between
+  hourly candles => 100% SELL. That is the laggy-bearish bug.
+  Closes: 9× max_age (anti-stuck fires correctly at 15m). R now near-zero
+  (-0.04 .. +0.08) — ATR SL stopped the -1.0R clips. Several closed +R
+  (0.02-0.08). Balance $9.76 after 16min, fee $0.246. Break-even per wave
+  before fees = real progress.
+- Verdict: diagnostic KEEP (log stays). Root cause found: stale ema_1h forces
+  bearish. Fix in iter-4.
+
+## Loop state (end of iter-3)
+- The engine no longer loses big per wave (R near 0, some +R). Fee drag is
+  controlled (~$0.25/16min). Survival is now governed by DIRECTION: it SELLs
+  everything because ema_1h is frozen-bearish. Fixing direction = the win-rate
+  lever.
+- iter-4 target: fix directional bias — stop using stale ema_1h for trend; use
+  (price vs ema_15m) momentum as primary and only use ema_1h trend when it has
+  updated within ~1h, OR bump ema_1h update frequency. Expect BUYs to start
+  firing on up-tapes. Also: consider shorter max_age (e.g. 600) so trades don't
+  sit 15m collecting only fee.

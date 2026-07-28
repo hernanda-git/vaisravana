@@ -25,7 +25,7 @@ MAX_OPEN_WAVES = int(os.getenv("VAISRAVANA_MAX_OPEN_WAVES", "8"))  # hard cap on
 BREAKEVEN_FLOOR_R = 0.3      # once peak_r >= this, SL moves to breakeven (tight enough to actually lock 0)
 FLIP_STRENGTH = 0.30         # bias strength needed to confirm a flip
 PARTIAL_FRAC = 0.35          # fraction to trim on stall
-MAX_WAVE_AGE_S = int(os.getenv("VAISRAVANA_MAX_WAVE_AGE_S", "1800"))  # force-close a wave after 30m if nothing else exits it (anti-stuck)
+MAX_WAVE_AGE_S = int(os.getenv("VAISRAVANA_MAX_WAVE_AGE_S", "900"))  # force-close a wave after 15m if nothing else exits it (anti-stuck; prod floor)
 
 
 # ── Actions ───────────────────────────────────────────────────────────────────
@@ -202,8 +202,9 @@ class WaveManager:
             except Exception as e:
                 log.warning("log_wave_open failed: %s", e)
 
-        log.info("WAVE OPEN %s %s notional=%.2f lev=%dx conf=%.2f",
-                 wave.side, wave.pair, notion, lev, confidence)
+        log.info("WAVE OPEN %s %s notional=%.2f lev=%dx conf=%.2f bias=%s(%.2f) ema15=%.5f ema1h=%.5f",
+                 wave.side, wave.pair, notion, lev, confidence,
+                 bias.direction, bias.strength, ctx.ema_15m, ctx.ema_1h)
         return wave
 
     # ── Per-tick surf ────────────────────────────────────────────────────
