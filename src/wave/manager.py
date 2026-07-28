@@ -20,7 +20,10 @@ log = logging.getLogger(__name__)
 CONFIRM_MS = 0.25            # micro-confirmation (seconds)
 CONF_EXIT_FLOOR = 0.16      # lowered so a wave holds long enough to reach its 1.5R TP instead of being killed on a minor conf dip
 CONF_HOLD_MS = 1.5           # require conf below floor for 1.5s before exit (debounce)
-COOLDOWN_TICKS = 600         # ticks before same key can re-enter (~50m @5s REST poll) — survival: cut over-trade
+COOLDOWN_S = 600.0           # wall-clock seconds before same (pair, side) can re-enter.
+# iter-7: cooldown was tick-based (600 ticks) but tick_cooldowns() ran once per
+# tick per PAIR, so with ~20 pairs it decayed ~20x too fast (INJ re-opened 4x in
+# 40s in run11). Wall-clock expiry makes the cooldown deterministic: 10 min.
 MAX_OPEN_WAVES = int(os.getenv("VAISRAVANA_MAX_OPEN_WAVES", "8"))  # hard cap on concurrent waves (fee-bleed guard)
 BREAKEVEN_FLOOR_R = 0.3      # once peak_r >= this, SL moves to breakeven (tight enough to actually lock 0)
 FLIP_STRENGTH = 0.30         # bias strength needed to confirm a flip
@@ -77,7 +80,7 @@ class WaveManager:
 
     # In-memory state
     waves: dict[str, Wave] = field(default_factory=dict)  # wave_id → Wave
-    cooldowns: dict[tuple[str, str], int] = field(default_factory=dict)  # (pair, side) → ticks
+    cooldowns: dict[tuple[str, str], float] = field(default_factory=dict)  # (pair, side) → expiry unix ts
     _break_start: dict[str, float] = field(default_factory=dict)  # wave_id → ts when flip detected
     _conf_break_start: dict[str, float] = field(default_factory=dict)
 
@@ -423,7 +426,7 @@ class WaveManager:
 
         # Per-wave cooldown
         key = (wave.pair, wave.side)
-        self.cooldowns[key] = COOLDOWN_TICKS
+        self.cooldowns[key] = time.time() + COOLDOWN_S
 
         # Clean up
         self.waves.pop(wave.wave_id, None)
@@ -468,19 +471,15 @@ class WaveManager:
     # ── Cooldown ──────────────────────────────────────────────────────────
 
     def tick_cooldowns(self) -> None:
-        """Decrement all cooldowns by 1 tick."""
-        to_del = []
-        for key, ticks in self.cooldowns.items():
-            if ticks <= 1:
-                to_del.append(key)
-            else:
-                self.cooldowns[key] = ticks - 1
-        for k in to_del:
+        """Purge expired cooldowns (wall-clock based since iter-7)."""
+        now = time.time()
+        for k in [k for k, exp in self.cooldowns.items() if exp <= now]:
             del self.cooldowns[k]
 
     def in_cooldown(self, pair: str, side: str) -> bool:
         """Check if (pair, side) is in cooldown."""
-        return (pair, side) in self.cooldowns
+        exp = self.cooldowns.get((pair, side))
+        return exp is not None and exp > time.time()
 
     # ── Kill all ──────────────────────────────────────────────────────────
 

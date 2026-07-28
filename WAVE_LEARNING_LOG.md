@@ -249,3 +249,39 @@ distribution for evidence.
   3. Watch for the first real reversal-exit fire (peak>=0.2 then <0) and
      verify it books near-scratch, not a whipsaw churn (if it churns, raise
      back toward 0.3).
+
+---
+
+## ITER-7 — fix cooldown decay bug: tick-based -> wall-clock (deterministic 10 min)
+- Hypothesis (standing Q1 of iter-6): fee drag dominated by re-entry churn
+  (INJ re-opened 4x in 40s in run11) despite COOLDOWN_TICKS=600 (~50 min
+  intended). Root cause found in code: tick_cooldowns() runs once per tick
+  per PAIR, so with ~15-20 pairs the counter decays 15-20x too fast — the
+  real cooldown was ~40-60s, not 50 min. Fix the mechanism, not the signal.
+- Change: manager.py — cooldowns now store a wall-clock expiry timestamp
+  (COOLDOWN_S=600.0, 10 min); tick_cooldowns() purges expired keys;
+  in_cooldown() compares against time.time(). No signal/gate/exit change.
+- Test: run12, fresh $10, ~21.6 min window, build --no-cache + force-recreate.
+- Evidence: 18 opens, but timing is now DETERMINISTIC: burst of 9 at startup
+  (19:20:26-41), zero opens for 10 min, second batch exactly at 19:30:38-19:31:11,
+  then none. Cooldown provably enforced (run11: INJ 4x/40s). Opens/min 0.83
+  vs run11 1.0; fee/min $0.045 vs $0.048. 9 closes, all max_age.
+  R: +0.29, +0.24, +0.18 and six negatives incl two deep -0.57/-0.60; avg R
+  ≈ -0.12 (tape-driven: two waves bled to near-SL and sat there till max_age;
+  cooldown does not touch exit logic). Balance $8.94, fees $0.968; pre-fee
+  PnL ≈ -0.09. Loss 10.6% in 21.6 min — well inside the 30% reject line.
+- Verdict: KEEP. This is a mechanism bug fix: the intended selectivity
+  control now actually works and is deterministic. Frequency and fee rate
+  both improved slightly; R distribution difference is tape (deep max_age
+  losers are an exit problem, not a cooldown problem). No crash.
+
+## Loop state (end of iter-7)
+- Baseline for iter-8 comparison: run12 = $8.94 @21.6min, fee $0.968,
+  18 opens (deterministic 10-min re-entry), 3/9 positive, all max_age.
+- Standing questions (updated):
+  1. EXIT / LOSS CUT: two closes bled to -0.57/-0.60R and were held to
+     max_age. Add a hard loss-cut exit (e.g. live_r <= -0.5 => close) so
+     losers cannot ride to near-SL for 15 min. Highest-leverage next step.
+  2. Still 0 tp_hit. After loss-cut, revisit TP 1.5xATR or trail after 0.5R.
+  3. Startup burst opens 9 waves in 15s at whatever conf clears 0.12 floor.
+     Consider a warmup delay (no opens first 60-120s) so EMAs/ctx seed first.
