@@ -135,7 +135,7 @@ async def run_wave_engine(conn, surface, notifier, guard, exchange, kill):
             return
 
         if not manager.in_cooldown(pair, "BUY"):
-            cand = scan(pair, "BUY", "1m", bias, confidence, ctx, zone_cache, adx=25)
+            cand = scan(pair, "BUY", "1m", bias, confidence, ctx, zone_cache, adx=20)
             if cand:
                 wave = manager.open(cand, bias, confidence, ctx, surface, wallet)
                 if wave:
@@ -144,7 +144,7 @@ async def run_wave_engine(conn, surface, notifier, guard, exchange, kill):
                     await notify_wave_open(notifier, wave, wallet, open_fee)
 
         if not manager.in_cooldown(pair, "SELL"):
-            cand = scan(pair, "SELL", "1m", bias, confidence, ctx, zone_cache, adx=25)
+            cand = scan(pair, "SELL", "1m", bias, confidence, ctx, zone_cache, adx=20)
             if cand:
                 wave = manager.open(cand, bias, confidence, ctx, surface, wallet)
                 if wave:

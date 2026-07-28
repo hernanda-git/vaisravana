@@ -75,6 +75,7 @@ class Wave:
     notional: float = 0.0           # USD notional at open (paper wallet sizing)
     margin: float = 0.0             # margin used = notional / leverage
     leverage: int = 1
+    open_ts: float = 0.0            # epoch seconds at open (for MAX_WAVE_AGE timeout)
 
     structure_score: float = 0.0    # 0..1, re-derived every tick
     mtf_confluence: bool = False

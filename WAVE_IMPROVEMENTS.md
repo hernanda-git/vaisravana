@@ -35,14 +35,29 @@ Prioritized for "surf even if random, improve win rate, be more expert."
 - [ ] **Volatility-scaled SL/TP:** use ATR instead of fixed 1.0% so calm pairs
   don't get stopped at noise.
 
-## P4 — Observability (record everything)
+## P4 — Directional edge (the real win-rate driver)
+- [ ] **Balance BUY/SELL by tape:** observed runs are 88% SELL and the tape is
+  sideways/up, so every SELL hits its 1% SL (r=−1.0). Need `read_bias` to
+  actually flip to bullish on up-tapes so BUY fires. Verify live `bias.direction`
+  distribution, not just the scanned candidate side.
+- [ ] **Wider / trailing SL that survives oscillation:** 1% SL is clipped by
+  normal noise. Use ATR-based SL (e.g. 1.5–2× ATR) or tighten the trailing
+  once `peak_r >= 0.3` so winners are not given back.
+- [ ] **Exit on first sign of reversal, not just SL:** if `peak_r` was >= 0.5
+  then drops back below 0, close (lock the round-trip). Currently only
+  `conf_collapse` + `max_age` close, both at a loss.
+- [ ] **Reduce SELL bias:** the gate currently lets SELL through on weak
+  bearish; require `bias.strength >= 0.35` AND `ema_slope < -0.2` for SELL, but
+  allow BUY on `ema_slope > 0.2`. This makes direction tape-accurate.
+
+## P5 — Observability (record everything)
 - [ ] **Live dashboard** (`/wave`, `/surf`) already show cards; add a
   `/stats` command with rolling win rate, avg R, fee drag, survival ETA.
 - [ ] **Persist eval to a timeseries** (sqlite `wave_metrics` table or
   elasticsearch) so win rate is tracked per-hour, not just per-run.
 - [ ] **Alert on death:** when `is_broke`, post to Telegram with final stats.
 
-## P5 — Safety / ops
+## P6 — Safety / ops
 - [ ] Add `MAX_DAILY_TRADES` hard cap.
 - [ ] Add `/clean` Telegram command to reset wallet + DB from chat.
 - [ ] Document the `build --no-cache` + `up --force-recreate` requirement in

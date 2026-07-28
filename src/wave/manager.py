@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -19,10 +20,12 @@ log = logging.getLogger(__name__)
 CONFIRM_MS = 0.25            # micro-confirmation (seconds)
 CONF_EXIT_FLOOR = 0.16      # lowered so a wave holds long enough to reach its 1.5R TP instead of being killed on a minor conf dip
 CONF_HOLD_MS = 1.5           # require conf below floor for 1.5s before exit (debounce)
-COOLDOWN_TICKS = 300         # ticks before same key can re-enter (~25m @5s REST poll)
+COOLDOWN_TICKS = 600         # ticks before same key can re-enter (~50m @5s REST poll) — survival: cut over-trade
+MAX_OPEN_WAVES = int(os.getenv("VAISRAVANA_MAX_OPEN_WAVES", "8"))  # hard cap on concurrent waves (fee-bleed guard)
 BREAKEVEN_FLOOR_R = 0.3      # once peak_r >= this, SL moves to breakeven (tight enough to actually lock 0)
 FLIP_STRENGTH = 0.30         # bias strength needed to confirm a flip
 PARTIAL_FRAC = 0.35          # fraction to trim on stall
+MAX_WAVE_AGE_S = int(os.getenv("VAISRAVANA_MAX_WAVE_AGE_S", "1800"))  # force-close a wave after 30m if nothing else exits it (anti-stuck)
 
 
 # ── Actions ───────────────────────────────────────────────────────────────────
@@ -126,6 +129,7 @@ class WaveManager:
             notional=notion,
             leverage=lev,
             margin=margin,
+            open_ts=time.time(),
             structure_score=candidate.strength,
             bias=bias.direction,
             confidence=confidence,
@@ -154,7 +158,6 @@ class WaveManager:
 
         # Cap total open waves so we don't over-trade (and burn the
         # paper balance on fees). Skip new entries past the cap.
-        MAX_OPEN_WAVES = int(os.getenv("VAISRAVANA_MAX_OPEN_WAVES", "12"))
         if len(self.waves) > MAX_OPEN_WAVES:
             log.info("open skipped: %d open waves (cap %d)", len(self.waves), MAX_OPEN_WAVES)
             return None
@@ -280,8 +283,9 @@ class WaveManager:
                 return WaveAction(type="CLOSE", reason="tp_hit", wave=wave, price=tick.price)
             if wave.side == "SELL" and tick.price <= wave.tp_price:
                 return WaveAction(type="CLOSE", reason="tp_hit", wave=wave, price=tick.price)
-        if wave.peak_r >= 0.5:
-            # bank a partial at +0.5R even without a hard TP level
+        if wave.peak_r >= 0.9:
+            # bank a partial at +0.9R only when very close to the 1.5R TP,
+            # so the wave is given room to reach the full TP first
             return WaveAction(type="CLOSE", reason="tp05_hit", wave=wave, price=tick.price)
 
         # 1. Anchor hit (price crossed SL)
@@ -327,6 +331,11 @@ class WaveManager:
             )
             if conf:
                 return WaveAction(type="CLOSE", reason=f"smc_break_{ztype}", wave=wave, price=tick.price)
+
+        # 5. Anti-stuck: force-close after MAX_WAVE_AGE_S if nothing else exited.
+        # Without this a sideways market leaves the wave open forever (balance frozen).
+        if wave.open_ts and (now - wave.open_ts) >= MAX_WAVE_AGE_S:
+            return WaveAction(type="CLOSE", reason="max_age", wave=wave, price=tick.price)
 
         return None
 
