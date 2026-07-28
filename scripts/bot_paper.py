@@ -79,6 +79,8 @@ def _install_proxy_opener() -> None:
     except Exception as e:
         log.warning("proxy opener failed: %s", e)
 
+log = logging.getLogger("vaisravana.bot")
+
 _install_proxy_opener()
 
 from symbols import SymbolRegistry  # noqa: E402
@@ -91,8 +93,6 @@ from scoring import decide, decide_ctx  # noqa: E402
 from strategy import active_strategies, evaluate_strategy  # noqa: E402
 from config import default_profiles  # noqa: E402
 from symbols import resolve_symbol, DEFAULT_UNIVERSE  # noqa: E402
-
-log = logging.getLogger("vaisravana.bot")
 
 PAIRS = os.getenv("VAISRAVANA_PAIRS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
@@ -291,25 +291,14 @@ def load_surface() -> config.ParameterSurface:
 
 
 def fetch_klines(symbol: str, tf: str, limit: int) -> list[Candle]:
-    import httpx
+    import urllib.request
     url = FETCH_URL.format(s=symbol, t=tf, n=limit)
-    # v0.0.33 fix: urllib.urlopen(timeout=...) can block indefinitely in
-    # ssl recv_into (read phase) and never raise, freezing the whole decision
-    # loop. httpx with an explicit read+connect timeout + retry guarantees the
-    # call always returns or raises within ~25s, so the loop can never hang.
-    last: Exception | None = None
-    for attempt in range(3):
-        try:
-            with httpx.Client(timeout=httpx.Timeout(8.0, connect=5.0)) as client:
-                r = client.get(url)
-                r.raise_for_status()
-                raw = r.json()
-            return [Candle(ts=r[0], o=float(r[1]), h=float(r[2]), l=float(r[3]),
-                           c=float(r[4]), v=float(r[5])) for r in raw]
-        except Exception as e:  # urllib/connection/read/timeout/JSON errors
-            last = e
-            time.sleep(2 * (attempt + 1))
-    raise RuntimeError(f"fetch_klines {symbol} {tf} failed after 3 attempts: {last}")
+    # v0.0.32: urlopen uses the process-wide proxy opener installed at import time
+    # (no-op when HTTPS_PROXY/HTTP_PROXY is unset), so a VPS behind a proxy reaches
+    # Binance. Falls back naturally when no proxy is configured.
+    raw = json.loads(urllib.request.urlopen(url, timeout=15).read().decode())
+    return [Candle(ts=r[0], o=float(r[1]), h=float(r[2]), l=float(r[3]),
+                   c=float(r[4]), v=float(r[5])) for r in raw]
 
 
 def _ema(vals: list[float], period: int) -> float:
@@ -700,6 +689,71 @@ def run() -> None:
     realized_loss_today = {"usd": 0.0, "day": ""}
     log.info("Vessavaṇa PAPER bot up: %d pairs · decide=%s · ctx=%s · v%s · %d open positions reloaded "
              "(LLM=%s)", len(PAIRS), DECISION_TF, ",".join(TFS), ver, len(open_trades), LLM_MODE)
+
+    # v0.1.0: Wave Engine routing (doc 50 §11)
+    engine = os.getenv("VAISRAVANA_ENGINE", "legacy").lower()
+    if engine == "wave":
+        from wave.engine import run_wave_engine
+        import asyncio
+        log.info("Routing to Wave Engine (VAISRAVANA_ENGINE=wave)")
+
+        # Start minimal Telegram command listener for /wave /surf /status
+        _cmd_listen = os.getenv("VAISRAVANA_CMD_LISTEN", "1") not in ("0", "false", "no")
+        _bot_username = os.getenv("VAISRAVANA_BOT_USERNAME", "vaisravana_bot")
+        _wave_listener = None
+        if _cmd_listen:
+            from telegram_bot import TelegramCommandListener
+            def _wave_router(text: str, _raw: str) -> None:
+                cmd = text.split()[0].split("@")[0].lower()
+                if cmd == "/wave":
+                    try:
+                        from wave.engine import wave_state, build_wave_card
+                        notifier.send_message(build_wave_card(wave_state.get("waves", [])))
+                    except Exception as e:
+                        notifier.send_message(f"Wave error: {e}")
+                elif cmd == "/surf":
+                    try:
+                        from wave.engine import wave_state, build_surf_card
+                        notifier.send_message(build_surf_card(wave_state.get("closed_today", [])))
+                    except Exception as e:
+                        notifier.send_message(f"Surf error: {e}")
+                elif cmd == "/status":
+                    from wave.engine import wave_state
+                    ws = wave_state.get("waves", [])
+                    notifier.send_message(
+                        f"Wave Engine — 15 pairs\n"
+                        f"Open waves: {len(ws)}\n"
+                        f"Last heartbeat: polling..."
+                    )
+                elif cmd == "/stop":
+                    import wave.engine as E
+                    E.stop_requested = True
+                    try:
+                        notifier.send_message(
+                            "🛑 **Wave Engine stop requested**\n"
+                            "Engine akan berhenti di tick berikutnya (clean)."
+                        )
+                    except Exception:
+                        pass
+            _wave_listener = TelegramCommandListener(
+                notifier, _wave_router,
+                poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID") or None,
+                bot_username=_bot_username,
+            )
+            _wave_listener.start()
+            log.info("Wave Engine Telegram listener started (/wave /surf /status)")
+
+        try:
+            asyncio.run(run_wave_engine(conn, surface, notifier, guard, exchange, kill))
+        except KeyboardInterrupt:
+            log.info("Wave Engine stopped by user")
+        except Exception as e:
+            log.exception("Wave Engine fatal error: %s", e)
+            try:
+                notifier.send_message(f"🔥 **Wave Engine crash**: {e}")
+            except Exception:
+                pass
+        return
     # Phase 13: clean startup card (Bahasa Indonesia, brand Vessavaṇa)
     notifier.notify_startup(ver, PAIRS, DECISION_TF, TFS, CYCLE_S, LLM_MODE, len(open_trades))
     # announce the deployed version + what changed on every (re)start
@@ -848,6 +902,16 @@ def run() -> None:
             except ValueError:
                 n = 25
             _send_decisions(n)
+        elif cmd == "/wave":
+            from wave.engine import wave_state, build_wave_card, get_wallet
+            wallet = get_wallet()
+            card = build_wave_card(wave_state.get("waves", []), wallet)
+            notifier.send_message(card)
+        elif cmd == "/surf":
+            from wave.engine import wave_state, build_surf_card, get_wallet
+            wallet = get_wallet()
+            card = build_surf_card(wave_state.get("closed_today", []), wallet)
+            notifier.send_message(card)
         # unknown commands are ignored
 
     def _send_decisions(limit: int = 25) -> None:
@@ -940,36 +1004,6 @@ def run() -> None:
 
     # v0.0.22: add necessary imports for command handlers
     from datetime import datetime, timezone
-
-    # start the telegram command listener (polls getUpdates in a daemon thread)
-    # v0.0.26: owner-only gate. allowed_chat_id defaults to None -> when
-    # NOTIFY_CHAT_ID is SET in the env, ONLY that chat's /commands are honored;
-    # everything else is ignored. This prevents a second bot (sharing the same
-    # Telegram token / update stream) from having its commands "nyampur" (mixed
-    # in) to THIS bot.
-    # v0.0.27: opt-out. If two bots share one token, ONLY ONE should
-    # poll getUpdates or they fight over the stream (offset starvation -> the
-    # other bot eats your /commands). Set VAISRAVANA_CMD_LISTEN=0 to make
-    # THIS bot stop polling entirely and leave the other bot as the sole handler.
-    _cmd_listen = os.getenv("VAISRAVANA_CMD_LISTEN", "1") not in ("0", "false", "no")
-    # v0.0.28: bind the listener to THIS bot's username so it only honors
-    # commands explicitly addressed to it (e.g. /status@vaisravana_bot) and
-    # ignores the other bot's commands (e.g. /health@xvalarion_bot) that
-    # arrive in the same shared chat. Plain (un-suffixed) commands are still
-    # accepted for single-bot convenience.
-    _bot_username = os.getenv("VAISRAVANA_BOT_USERNAME", "vaisravana_bot")
-    _cmd_listener = None
-    if _cmd_listen:
-        _cmd_listener = TelegramCommandListener(
-            notifier, _dispatch,
-            poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID") or None,
-            bot_username=_bot_username,
-        )
-        _cmd_listener.start()
-        log.info("Telegram /status /clean /stop listener started (Vaisravana-only; /health reserved for xvalarion)")
-    else:
-        log.info("Telegram command listener DISABLED (VAISRAVANA_CMD_LISTEN=0) "
-                  "- another bot owns the shared token's getUpdates stream")
 
     while True:
         try:
