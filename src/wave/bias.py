@@ -110,17 +110,15 @@ def read_bias(pair: str, tick, ctx: TickContext) -> BiasReading:
 
     Pure function — all inputs are in tick/ctx.
     """
-    # 1. MTF EMA — robust blend of TREND (fast vs slow EMA) and MOMENTUM
-    #    (price vs fast EMA). Using price-vs-ema_15m alone was laggy: ema_15m
-    #    stayed above price during up-moves, so the bot kept SELLing into
-    #    rallies. Now trend (ema_15m vs ema_1h) defines direction; momentum
-    #    (price vs ema_15m) confirms. Falls back to price if ema_1h unpopulated.
-    if ctx.ema_1h:
-        trend = _ema_cross_strength(ctx.ema_15m, ctx.ema_1h)
-    else:
-        trend = _ema_cross_strength(ctx.ema_15m, ctx.price)
+    # 1. MTF EMA — live MOMENTUM (price vs ema_15m) is the primary directional
+    #    signal: it is always current (price is per-tick) and flips correctly on
+    #    up/down moves. The slow TREND (ema_15m vs ema_1h) is a minor
+    #    confirmation ONLY — ema_1h only updates on hourly candles, so between
+    #    those it is frozen and was found (iter-3) to force a constant bearish
+    #    bias => 100% SELL. Demote it to 0.2 weight so it can no longer dominate.
     momentum = _ema_cross_strength(ctx.price, ctx.ema_15m)
-    mtf_ema = 0.6 * trend + 0.4 * momentum
+    trend = _ema_cross_strength(ctx.ema_15m, ctx.ema_1h) if ctx.ema_1h else momentum
+    mtf_ema = 0.8 * momentum + 0.2 * trend
 
     # 2. Order-flow delta
     flow_delta = _flow_delta_norm(ctx.flow_delta, ctx.flow_volume)

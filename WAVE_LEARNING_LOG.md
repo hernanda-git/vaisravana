@@ -100,3 +100,35 @@ distribution for evidence.
   updated within ~1h, OR bump ema_1h update frequency. Expect BUYs to start
   firing on up-tapes. Also: consider shorter max_age (e.g. 600) so trades don't
   sit 15m collecting only fee.
+
+---
+
+## ITER-4 — directional fix (live momentum primary)
+- Hypothesis (from iter-3 root cause): ema_1h is frozen between hourly candles, so
+  the trend term forced a constant bearish bias => 100% SELL. Fix: make live
+  MOMENTUM (price vs ema_15m) the PRIMARY signal (always current), demote the
+  stale ema_1h trend to 0.2 weight so it cannot dominate.
+- Change: bias.read_bias mtf_ema = 0.8*momentum + 0.2*trend.
+- Test: run9, fresh $10, MAX_WAVE_AGE_S=900.
+- Evidence: 9/9 opens are **BUY, bias=bullish 0.57-0.67** (was 100% SELL).
+  Direction is FIXED — the bot now buys up-tapes. BUT all 9 closes are max_age
+  at NEGATIVE R (-0.02 .. -0.22), balance $9.04 after 25min, fee $0.838.
+  The tape did not rise enough in 15min for TP, and waves expired near entry.
+- Verdict: KEEP the directional fix (real progress: SELL-everything bug gone).
+  But exit is too slow — 15min max_age lets small losses accumulate. The new
+  lever is EXIT SPEED, not direction.
+
+## Loop state (end of iter-4)
+- Trajectory: run5 all -1.0R SL clips -> run6/7 ATR SL (R near 0) -> run8
+  100% SELL (frozen ema_1h) -> run9 100% BUY (fixed) but exits too slow.
+- The engine now (a) survives (no -1.0R clips), (b) is directionally correct.
+  Remaining gap = EXIT TIMING: waves should either hit TP (1.2-2R) or cut fast
+  when momentum fades, not sit 15min to a small loss.
+- iter-5 target: faster exit. Options (pick ONE, test, compare):
+  (a) lower MAX_WAVE_AGE_S 900->420 (7min) so stalls cut sooner;
+  (b) add a momentum-fade exit: if peak_r>=0.2 then live_r<0 -> close
+      (lock the round-trip immediately, don't wait for max_age);
+  (c) raise TP reachability: TP = 1.5xATR (from 2xATR) so winners hit sooner.
+  Prefer (b) — it directly converts "was up, gave it back" into a smaller loss
+  or scratch, which is the expert rule already partially present (reversal at
+  peak>=0.5). Lower the reversal threshold to peak>=0.2.
