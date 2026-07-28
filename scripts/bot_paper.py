@@ -291,14 +291,25 @@ def load_surface() -> config.ParameterSurface:
 
 
 def fetch_klines(symbol: str, tf: str, limit: int) -> list[Candle]:
-    import urllib.request
+    import httpx
     url = FETCH_URL.format(s=symbol, t=tf, n=limit)
-    # v0.0.32: urlopen uses the process-wide proxy opener installed at import time
-    # (no-op when HTTPS_PROXY/HTTP_PROXY is unset), so a VPS behind a proxy reaches
-    # Binance. Falls back naturally when no proxy is configured.
-    raw = json.loads(urllib.request.urlopen(url, timeout=15).read().decode())
-    return [Candle(ts=r[0], o=float(r[1]), h=float(r[2]), l=float(r[3]),
-                   c=float(r[4]), v=float(r[5])) for r in raw]
+    # v0.0.33 fix: urllib.urlopen(timeout=...) can block indefinitely in
+    # ssl recv_into (read phase) and never raise, freezing the whole decision
+    # loop. httpx with an explicit read+connect timeout + retry guarantees the
+    # call always returns or raises within ~25s, so the loop can never hang.
+    last: Exception | None = None
+    for attempt in range(3):
+        try:
+            with httpx.Client(timeout=httpx.Timeout(8.0, connect=5.0)) as client:
+                r = client.get(url)
+                r.raise_for_status()
+                raw = r.json()
+            return [Candle(ts=r[0], o=float(r[1]), h=float(r[2]), l=float(r[3]),
+                           c=float(r[4]), v=float(r[5])) for r in raw]
+        except Exception as e:  # urllib/connection/read/timeout/JSON errors
+            last = e
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"fetch_klines {symbol} {tf} failed after 3 attempts: {last}")
 
 
 def _ema(vals: list[float], period: int) -> float:
