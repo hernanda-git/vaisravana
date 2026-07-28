@@ -117,6 +117,11 @@ FETCH_LIMIT = int(os.getenv("VAISRAVANA_KLINES", "600"))
 # full notional (price * size), same as real futures.
 FEE_RATE = float(os.getenv("VAISRAVANA_FEE_RATE", "0.0004"))
 START_BALANCE = float(os.getenv("VAISRAVANA_START_BALANCE", "10.0"))
+# v0.0.33: portfolio-level exposure ceiling (goals.md: capital preservation).
+# Cap concurrent positions and total margin-used so a unified SL cascade cannot
+# wipe the $10 paper account. Tunable via env.
+MAX_OPEN_POSITIONS = int(os.getenv("VAISRAVANA_MAX_OPEN", "5"))
+MAX_TOTAL_MARGIN_PCT = float(os.getenv("VAISRAVANA_MAX_MARGIN_PCT", "50.0"))
 
 
 def paper_equity(conn, open_trades: dict, get_mark) -> dict:
@@ -1523,6 +1528,23 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         if pair_w != 1.0:
             qty *= pair_w
             log.debug("pair weight %s=%.2f qty=%.4f", pair, pair_w, qty)
+        # v0.0.33: portfolio-level risk cap (goals.md: capital preservation).
+        # Refuse NEW entries once we hit the global position count or total margin
+        # exposure ceiling — 19 concurrent positions on a $10 account would allow
+        # ~95% account risk if all SL at once. Cap both count and margin-used.
+        _open_n = len(open_trades)
+        if _open_n >= MAX_OPEN_POSITIONS:
+            log.info("portfolio cap: %d positions >= MAX_OPEN_POSITIONS %d — skip %s",
+                     _open_n, MAX_OPEN_POSITIONS, pair)
+            continue
+        _used_margin = sum(
+            (t.entry_price or 0.0) * (t.size or 0.0) / max(getattr(t, "leverage", 1) or 1, 1)
+            for t in open_trades.values())
+        _new_margin = (entry * qty) / max(lev_used, 1)
+        if (_used_margin + _new_margin) > MAX_TOTAL_MARGIN_PCT / 100.0 * equity:
+            log.info("portfolio cap: margin %.2f + %.2f > %.1f%% of equity %.2f — skip %s",
+                     _used_margin, _new_margin, MAX_TOTAL_MARGIN_PCT, equity, pair)
+            continue
         trade = lc.open(correlation_id=corr_id, pair=pair, tf=dtf,
                         side=se.side, entry_price=entry, size=qty,
                         leverage=lev_used, sl_price=sl, tp_price=tp,
