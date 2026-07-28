@@ -99,8 +99,8 @@ def default_profiles() -> dict[str, StrategyProfile]:
     return {
         "scalping": StrategyProfile(
             name="scalping", decision_tf="1m", context_tfs=["5m", "15m"],
-            entry_threshold=0.60, watch_threshold=0.52,
-            sl_atr_mult=1.0, tp_atr_mult=1.5, max_hold_min=15, cooldown_min=2,
+            entry_threshold=0.68, watch_threshold=0.58,
+            sl_atr_mult=1.125, tp_atr_mult=2.25, max_hold_min=15, cooldown_min=2,
             winrate_floor_pct=56.0,
         ),
         "day": StrategyProfile(

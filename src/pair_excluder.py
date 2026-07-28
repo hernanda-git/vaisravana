@@ -51,6 +51,11 @@ class PairExcluder:
         self.min_trades = min_trades
         self.wr_exclude_below = wr_exclude_below
         self.wr_include_above = wr_include_above
+        # v0.0.33 WR-improvement: exclude pairs whose RAW WR < 45% (was 40%) once they
+        # have enough sample — this lifts aggregate WR without touching engine logic.
+        # Net$ < 0 still triggers exclusion regardless of WR (owner mandate: no losing weight).
+        if wr_exclude_below <= 0:
+            self.wr_exclude_below = 45.0
         # pair -> {"wins": int, "losses": int, "excluded": bool}
         self._state: dict[str, dict] = {}
         self._load()
