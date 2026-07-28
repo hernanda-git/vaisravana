@@ -35,7 +35,7 @@ from sentinel import Sentinel
 from evaluation import evaluate
 from llm_research import LLMResearcher, NarrativeResearcher, ZenClient
 from config import default_surface  # noqa: E402
-from db import init_db, db_stats  # noqa: E402
+from db import init_db, db_stats, paper_stats  # noqa: E402
 from decision import DecisionOrchestrator  # noqa: E402
 from engines import MarketState  # noqa: E402
 from lifecycle import TradeLifecycle  # noqa: E402
@@ -111,6 +111,32 @@ FETCH_URL = os.getenv(
 # Optional HTTP(S) proxy for kline + Telegram fetches (urllib reads HTTP_PROXY/HTTPS_PROXY
 # only when opener is built with ProxyHandler — see _install_proxy()).
 FETCH_LIMIT = int(os.getenv("VAISRAVANA_KLINES", "600"))
+# v0.0.33: paper-account + fee model for the redesigned notifier.
+# Fake starting balance ($10); bot "runs until balance hits 0". Each open AND close
+# pays a taker fee (Binance USDⓈ-M default 0.04% per side). Fees are charged on the
+# full notional (price * size), same as real futures.
+FEE_RATE = float(os.getenv("VAISRAVANA_FEE_RATE", "0.0004"))
+START_BALANCE = float(os.getenv("VAISRAVANA_START_BALANCE", "10.0"))
+
+
+def paper_equity(conn, open_trades: dict, get_mark) -> dict:
+    """Equity snapshot for notifier footers.
+
+    Combines DB realized PnL (paper_stats) with live unrealized PnL from marks.
+    get_mark(pair) -> current price or None.
+    """
+    base = paper_stats(conn, start_balance=START_BALANCE, fee_rate=FEE_RATE)
+    unreal = 0.0
+    for (pair, _tf, side), t in open_trades.items():
+        mark = get_mark(pair) if get_mark else None
+        if mark is None:
+            mark = t.entry_price
+        d = 1.0 if side == "BUY" else -1.0
+        unreal += (mark - t.entry_price) * d * t.size
+    base["unrealized"] = round(unreal, 2)
+    base["equity"] = round(base["balance"] + unreal, 2)
+    return base
+
 CYCLE_S = int(os.getenv("VAISRAVANA_CYCLE_S", "60"))  # 60s = one decision per minute
 # v0.0.32: default to a local ./data dir (works on any host) instead of Fly-only /data.
 # Set VAISRAVANA_DB=/data/vaisravana.db on Fly to keep the volume behaviour.
@@ -1071,7 +1097,7 @@ def run() -> None:
                 # Same VIP0 assumption as src/backtest.py: entry maker 0.02%,
                 # exit (SL/MAXHOLD/TP) taker 0.05% on notional.
                 notional = (t.entry_price or 0.0) * (t.size or 0.0)
-                fee_usd = notional * (0.0002 + 0.0005)
+                fee_usd = notional * (FEE_RATE * 2)  # open + close taker
                 res = lc.close(t, exit_price=ev.price, close_reason=ev.reason,
                                fees_usd=fee_usd)
                 kill.record_close(ev.symbol, ev.tf, ev.side, win=bool(res["win"]))
@@ -1079,8 +1105,12 @@ def run() -> None:
                     realized_loss_today["usd"] += -res["pnl_usd"]
                 tel.exec_event(t.correlation_id, ev.symbol, DECISION_TF, "CLOSE",
                                side=ev.side, price=ev.price, status=ev.reason)
+                _net = res["pnl_usd"] - fee_usd
+                _get_mark = (lambda p: exchange.mark_price(p)) if exchange else None
+                _stats = paper_equity(conn, open_trades, _get_mark)
                 notifier.notify_close(ev.symbol, DECISION_TF, ev.side, ev.price,
-                                      ev.reason, res["r_multiple"], bool(res["win"]))
+                                      ev.reason, res["r_multiple"], bool(res["win"]),
+                                      fee_usd=fee_usd, net_usd=_net, stats=_stats)
                 # v0.0.19: post-SL cooldown — skip next N entries on (pair, side) after SL
                 if ev.reason == "SL":
                     cd_key = (ev.symbol, ev.side)
@@ -1339,10 +1369,12 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                      (t.side == "SELL" and bar.h >= t.sl_price)
             if hit_tp:
                 _close(pair, dtf, t.side, t.tp_price, "TP", conn, lc, tel, kill,
-                       notifier, open_trades, loss_book=loss_book, excluder=excluder)
+                       notifier, open_trades, loss_book=loss_book, excluder=excluder,
+                       exchange=exchange)
             elif hit_sl:
                 _close(pair, dtf, t.side, t.sl_price, "SL", conn, lc, tel, kill,
-                       notifier, open_trades, loss_book=loss_book, excluder=excluder)
+                       notifier, open_trades, loss_book=loss_book, excluder=excluder,
+                       exchange=exchange)
             continue  # this strategy already has a position; move to the next profile
 
         # kill-switch gate (real daily-loss + feed-health, doc 30 §7) — checked once per tick
@@ -1509,19 +1541,25 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             ))
         tel.exec_event(corr_id, pair, dtf, "FILL", order_type="LIMIT",
                        side=se.side, price=entry, qty=qty, status="FILLED")
-        notifier.notify_fill(pair, dtf, se.side, entry, sl, tp, surface.max_leverage,
-                             strategy=profile.name)
+        _fee_open = FEE_RATE * entry * qty
+        _mark = cache.get(dtf, [None])[-1].c if cache.get(dtf) else entry
+        _stats = paper_equity(conn, open_trades,
+                               lambda p: (_mark if p == pair else entry))
+        notifier.notify_fill(pair, dtf, se.side, entry, sl, tp, lev_used,
+                             conf=getattr(se, "confidence_pct", 0.0),
+                             fee_usd=_fee_open, size=qty, stats=_stats)
         # v0.0.23 T3: record the entry side for SELL-share balancing.
         if side_balancer is not None:
             side_balancer.record(se.side)
 
 
 def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,
-           open_trades, loss_book=None, excluder=None):
+           open_trades, loss_book=None, excluder=None, exchange=None):
     t = open_trades.pop((pair, tf, side), None)
     if t is None:
         return
-    res = lc.close(t, exit_price=exit_price, close_reason=reason)
+    res = lc.close(t, exit_price=exit_price, close_reason=reason,
+                   fees_usd=FEE_RATE * (t.entry_price + exit_price) * t.size)
     kill.record_close(pair, tf, side, win=bool(res["win"]))
     # v0.0.23 T2 / v0.0.24 P0-31: feed the close into the pair excluder.
     # Pass `conn` so the excluder uses NET expectancy$ (after fees) — the real
@@ -1542,8 +1580,13 @@ def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,
         loss_book["usd"] += -res["pnl_usd"]
     tel.exec_event(t.correlation_id, pair, tf, "CLOSE", side=side,
                    price=exit_price, status=reason)
+    _fee_total = FEE_RATE * (t.entry_price + exit_price) * t.size
+    _net = res["pnl_usd"] - _fee_total
+    _get_mark = (lambda p: exchange.mark_price(p)) if exchange else None
+    _stats = paper_equity(conn, open_trades, _get_mark)
     notifier.notify_close(pair, tf, side, exit_price, reason, res["r_multiple"],
-                          bool(res["win"]))
+                          bool(res["win"]), fee_usd=_fee_total, net_usd=_net,
+                          stats=_stats)
     rep = evaluate(conn, pair, tf, side)
     if rep.n_trades >= 20 and rep.all_pass:
         notifier.notify_promotion(pair, tf, "SHADOW READY",

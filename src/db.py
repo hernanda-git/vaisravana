@@ -325,6 +325,45 @@ def _wr_block(conn, where: str = "", params: tuple = ()) -> dict:
     }
 
 
+def paper_stats(conn: sqlite3.Connection, start_balance: float = 10.0,
+                fee_rate: float = 0.0004) -> dict:
+    """Paper-account equity snapshot for the redesigned notifier.
+
+    balance    = start + realized(pnl - fees) over closed trades
+    used       = SUM(entry_price * size) over open trades  (notional exposure)
+    margin     = SUM(entry_price * size / leverage) over open trades (collateral used)
+    realized   = balance - start
+    open_n     = count of open trades
+    total_fees = SUM(fees_usd) over closed trades
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(pnl_usd),0.0),"
+        " COALESCE(SUM(COALESCE(fees_usd,0.0)),0.0), COUNT(*) "
+        "FROM trade_logs WHERE ts_fully_closed IS NOT NULL"
+    ).fetchone()
+    realized_pnl = float(row[0] or 0.0) - float(row[1] or 0.0)
+    closed_n = int(row[2] or 0)
+    orow = conn.execute(
+        "SELECT COALESCE(SUM(entry_price * size),0.0),"
+        " COALESCE(SUM(entry_price * size / NULLIF(leverage,0)),0.0), COUNT(*) "
+        "FROM trade_logs WHERE ts_fully_closed IS NULL"
+    ).fetchone()
+    used = float(orow[0] or 0.0)
+    margin = float(orow[1] or 0.0)
+    open_n = int(orow[2] or 0)
+    balance = start_balance + realized_pnl
+    return {
+        "start_balance": start_balance,
+        "balance": round(balance, 2),
+        "used": round(used, 2),
+        "margin": round(margin, 2),
+        "open_n": open_n,
+        "realized": round(realized_pnl, 2),
+        "closed_n": closed_n,
+        "total_fees": round(float(row[1] or 0.0), 4),
+    }
+
+
 def trade_summary(conn: sqlite3.Connection, recent_n: int = 10) -> dict:
     """Full owner-facing trade summary for the `/health` command.
 

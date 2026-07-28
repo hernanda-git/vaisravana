@@ -138,24 +138,52 @@ class TelegramNotifier:
         return self.send_message(text)
 
     def notify_fill(self, pair: str, tf: str, side: str, entry: float,
-                    sl: float, tp: float, lev: float, strategy: str = "") -> bool:
-        strat = f" · <b>{html_escape(strategy)}</b>" if strategy else ""
+                    sl: float, tp: float, lev: float, conf: float = 0.0,
+                    fee_usd: float = 0.0, size: float = 0.0,
+                    stats: dict | None = None) -> bool:
+        side_icon = "🟢" if side == "BUY" else "🔴"
+        s = stats or {}
+        equity = s.get("equity", s.get("balance", 0.0))
+        margin = s.get("margin", 0.0)
+        unreal = s.get("unrealized", 0.0)
+        realized = s.get("realized", 0.0)
+        open_n = s.get("open_n", 0)
         text = (
-            f"📈 <b>PAPER FILL</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
-            f"<code>{html_escape(side)}</code>{strat}\n"
-            f"entry: <code>{entry:.2f}</code> · sl: <code>{sl:.2f}</code> · "
-            f"tp: <code>{tp:.2f}</code> · lev: <code>{lev}x</code>\n"
-            f"🕐 <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>"
+            f"{side_icon} <b>OPEN</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
+            f"<code>{html_escape(side)}</code>\n"
+            f"entry: <code>{entry:.2f}</code>  sl: <code>{sl:.2f}</code>  "
+            f"tp: <code>{tp:.2f}</code>\n"
+            f"size: <code>{size}</code>  lev: <code>{lev}x</code>  "
+            f"conf: <code>{conf:.2f}</code>\n"
+            f"fee: <code>{fee_usd:.4f}$</code>\n"
+            f"\n<b>Balance</b>\n"
+            f"equity: <code>${equity:.2f}</code>  used: <code>${margin:.2f}</code>\n"
+            f"unrealized: <code>{unreal:+.2f}$</code>  realized: <code>{realized:+.2f}$</code>\n"
+            f"open positions: <code>{open_n}</code>"
         )
         return self.send_message(text)
 
     def notify_close(self, pair: str, tf: str, side: str, exit_price: float,
-                     reason: str, pnl_r: float, win: bool) -> bool:
+                     reason: str, pnl_r: float, win: bool,
+                     fee_usd: float = 0.0, net_usd: float = 0.0,
+                     stats: dict | None = None) -> bool:
         emoji = "✅" if win else "❌"
+        s = stats or {}
+        equity = s.get("equity", s.get("balance", 0.0))
+        margin = s.get("margin", 0.0)
+        unreal = s.get("unrealized", 0.0)
+        realized = s.get("realized", 0.0)
+        open_n = s.get("open_n", 0)
         text = (
             f"{emoji} <b>CLOSE</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
             f"<code>{html_escape(side)}</code> ({html_escape(reason)})\n"
-            f"exit: <code>{exit_price:.2f}</code> · PnL: <code>{pnl_r:+.2f}R</code>"
+            f"exit: <code>{exit_price:.2f}</code>  pnl: <code>{pnl_r:+.2f}R</code>  "
+            f"net: <code>{net_usd:+.4f}$</code>\n"
+            f"fee: <code>{fee_usd:.4f}$</code>\n"
+            f"\n<b>Balance</b>\n"
+            f"equity: <code>${equity:.2f}</code>  used: <code>${margin:.2f}</code>\n"
+            f"unrealized: <code>{unreal:+.2f}$</code>  realized: <code>{realized:+.2f}$</code>\n"
+            f"open positions: <code>{open_n}</code>"
         )
         return self.send_message(text)
 
