@@ -1,4 +1,4 @@
-"""Project Vaiśravaṇa — versioned Fly deploy.
+"""Project Vaiśravaṇa — versioned local deploy to sera (this machine).
 
 Usage:
     python scripts/deploy.py ["changelog text here"]
@@ -7,7 +7,8 @@ What it does (in order):
   1. bump VERSION patch digit (0.0.xxx); major.minor are intentionally frozen.
   2. prepend a `## vX.Y.Z` entry to CHANGELOG.md (with the message you pass).
   3. git tag vX.Y.Z, commit VERSION + CHANGELOG, push (tags + branch).
-  4. flyctl deploy --app vaisravana.
+  4. rebuild + restart the local docker-compose stack (bots-vaisravana) on sera.
+     No cloud deploy (Fly.io) is used — everything runs on this machine.
 The deployed bot reads VERSION on startup and announces vX.Y.Z + changelog to Telegram.
 """
 
@@ -68,7 +69,7 @@ def main() -> None:
         import sqlite3 as _sqlite
         from cutover_gate import CutoverGate
         import db as _db
-        # production DB is /data/vaisravana.db on Fly; allow local override.
+        # production DB is /data/vaisravana.db on sera; allow local override.
         db_path = ROOT / "vaisravana.db"
         live_db = "/data/vaisravana.db"
         # Connect through db.init_db so the connection gets row_factory=sqlite3.Row
@@ -90,8 +91,11 @@ def main() -> None:
     except Exception as e:
         sys.exit(f"✋ DEPLOY ABORTED — cutover gate unreadable ({e}). Refusing by default.")
 
-    # 4. deploy
-    _run(["flyctl", "deploy", "--app", APP])
+    # 4. local deploy to sera: rebuild + restart the docker-compose stack.
+    # Everything runs on this machine; no cloud provider is involved.
+    _run(["docker", "compose", "-f", "deploy/vps/docker-compose.yml",
+          "up", "-d", "--build", "vaisravana"])
+
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Tests for Phase 10 Fly deploy: Telegram notifier + restart-safe open reload."""
+"""Tests for Phase 10 local deploy: Telegram notifier + restart-safe open reload."""
 
 import sys
 from pathlib import Path

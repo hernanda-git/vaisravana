@@ -1,7 +1,8 @@
-# Deployment: Vaiśravaṇa bot stack on Tencent Lighthouse (VPS)
+# Deployment: Vaiśravaṇa bot stack on sera (this machine)
 
-Migrated from Fly.io (`sin`) to a Tencent Lighthouse instance in **ap-jakarta**.
-This document covers the **Caddy reverse proxy + firewall lockdown** layer that wraps the
+Runs entirely on this machine (sera, the Tencent Lighthouse instance in **ap-jakarta**).
+There is **no cloud deploy** — Fly.io is no longer used. This document covers the
+**Caddy reverse proxy + firewall lockdown** layer that wraps the
 3 Dockerized bots (`gateway`, `vaisravana`, `listener`).
 
 - **Host:** `43.157.208.115` (Lighthouse `lhins-09uls8ni`)
@@ -159,17 +160,17 @@ systemctl status bots-stack
 
 ---
 
-## 6. Rollback to Fly.io
+## 6. Rollback / recovery on this machine
 
-The Fly apps were scaled to 0 (machines destroyed), **not deleted**. To fall back:
+All state lives on sera. To recover after a bad deploy, restart the stack:
 
 ```bash
-fly scale count 1 --yes -a vaisravana
-fly scale count 1 --yes -a learnernoearner-listener
-fly scale count 1 --yes -a binance-gateway
-# then on the VPS:
-systemctl stop bots-stack
+systemctl restart bots-stack        # or: docker compose -f deploy/vps/docker-compose.yml up -d
+# inspect
+docker logs --tail 50 bots-vaisravana
 ```
+
+There is no cloud fallback — the bot only runs here.
 
 ---
 
