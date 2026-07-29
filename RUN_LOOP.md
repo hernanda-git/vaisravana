@@ -52,7 +52,7 @@ catastrophic loss.** Source of truth = recorded metrics, not opinion.
    cd /opt/bots/vw_commit
    git add src/wave/ scripts/bot_paper.py WAVE_LEARNING_LOG.md
    git add -f eval_data/wave_runN.db
-   git -c user.name="hernanda" -c user.email="hernanda@users.noreply.github.com" \
+   git -c user.name="valarion" -c user.email="42990222+hernanda-git@users.noreply.github.com" \
      commit -m "iter-N: <what>"
    git pull --rebase origin vaisravana-wave   # resolve if remote moved
    git push origin vaisravana-wave
@@ -67,7 +67,7 @@ catastrophic loss.** Source of truth = recorded metrics, not opinion.
 - Always reset wallet+DB before a measured run; never compare a fresh run to a
   stale wallet.
 - Never commit `.env` tokens. `.env` is gitignored; only `.env.example` is safe.
-- Creds for commit/push: user.name=hernanda, user.email=hernanda@users.noreply.github.com.
+- Creds for commit/push: user.name=valarion, user.email=42990222+hernanda-git@users.noreply.github.com.
 - If a change CRASHES the bot (no WAVE OPEN in 60s, or stack trace in logs),
   revert it, note the failure in the log, and try a smaller variant.
 - Capital preservation first. If a run loses >30% of the $10 in <10 min, the
