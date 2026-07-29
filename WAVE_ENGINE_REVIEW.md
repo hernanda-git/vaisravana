@@ -156,4 +156,165 @@ The goal "grow the balance no matter win or loss" is only achievable by **earnin
 
 ---
 
-*End of review. Pause the autonomous cron (done) before any rebuild so measurement is clean.*
+*End of review (Part A). Pause the autonomous cron (done) before any rebuild so measurement is clean.*
+
+---
+
+# PART B — Enriched Research (market microstructure, grounded in sources)
+
+This section supersedes the earlier "just switch to maker and you win" suggestion.
+Further research shows that advice is **wrong for a naive bot**. The truth is
+more interesting and more honest.
+
+## B.1 The Market Maker's Dilemma (empirical, Binance, 2025)
+
+A 2025 paper (Shestopaloff; Oxford-Man + Queen Mary; arXiv 2502.18625),
+*Navigating the Fill Probability vs. Post-Fill Returns Trade-Off*, studies
+exactly the strategy we considered, on exactly our venue (Binance). Findings:
+
+- **Fill probability is NEGATIVELY correlated with post-fill returns.** The
+  more likely your resting maker order is to be filled, the worse the price
+  moves for you after. This is textbook **adverse selection**: you get filled
+  when an informed trader wants the other side.
+- **The naive MM strategy loses ~0.44 bp per round-trip net of rebates**, at
+  high frequency, with a poor Sharpe. The author's words: *"the naive market
+  making strategy is thus a recipe for poverty — heaven help the starry-eyed
+  novice traders, fresh from academia, who, seduced by maker rebates, attempt
+  to implement this strategy in practice."*
+- **On Binance the spread is virtually always ONE TICK wide**, except
+  fleetingly after price changes, whereupon there is *fierce competition to
+  close the spread immediately*. So there is almost no spread to capture; the
+  rebate is the only edge, and it is tiny.
+- **Adverse selection increases with opposite-side queue size** (Q_top^opp).
+  The paper quantifies post-fill markout returns by queue regime — they are
+  predominantly NEGATIVE across all regimes. This is the signal that *separates*
+  a smarter MM (queue-aware, flow-aware cancellation) from the naive one.
+
+**Implication for us:** posting a dumb bid/ask and hoping is a losing game
+even on maker fees. The edge, if any, is in *when to post, where in the queue,
+and when to cancel* — i.e. reading order-flow imbalance and queue position.
+That is a different, harder bot than "buy and sell at once."
+
+## B.2 Maker rebates are not free money at retail scale
+
+Binance spot maker rebate tiers (official fee schedule):
+- VIP2: -0.0040% (requires 0.15% weekly maker-volume share, or ~$ volume)
+- VIP3: -0.0060% (0.50% maker-volume share)
+- VIP4: -0.0080% (1.00% maker-volume share)
+
+For **USD-M Futures** (our market), regular maker fee is **0.02%** (no rebate
+at retail); taker 0.04% (0.05% without BNB). A $10 paper account trading a few
+hundred $/day qualifies for **none** of the rebate tiers. So:
+- Our bot pays 0.04% taker × 2 = 0.08%/RT.
+- A maker-based bot at our size pays 0.02% × 2 = 0.04%/RT but earns **$0 rebate**.
+- The maker bot saves 0.04%/RT in fees vs the taker bot — real, but it does
+  NOT flip the strategy positive, because the 0.44 bp/RT adverse-selection
+  drag (B.1) dwarfs the fee saving.
+
+**Conclusion:** the fee side is a second-order effect. The first-order effect
+is adverse selection, which punishes *both* taker and naive maker.
+
+## B.3 Why directional TA bots lose (the millions-of-bots problem, quantified)
+
+val's intuition — *"if millions of bots do the same, the price goes different"*
+— is exactly the academic concept of **signal crowding** and **predatory
+trading**:
+- Every retail bot reads the same Binance klines → same EMA/RSI → same
+  bullish cross. They buy together; the aggregate buy *is* the price move;
+  then the same cross on the downside triggers synchronized selling.
+- HFT/predatory algorithms *detect* this flow (they see the order book the
+  bot only sees as best bid/ask) and **trade ahead / pick off** the slow
+  participants (Demos "Hunting Whales"; layering/spoofing literature).
+- Result: the late, slow, public-signal taker (our bot) systematically fills
+  on the wrong side of the move. This is *exactly* the adverse-selection
+  mechanism in B.1, just for trend-following instead of MM.
+
+So the directional bot is not "unlucky" — it is *structurally selected
+against*. The crowd is the price, and the bot is always a step behind it.
+
+## B.4 What actually has edge (and what doesn't), for a $10 retail bot
+
+| Strategy | Edge source | Verdict at our scale |
+|---|---|---|
+| Directional taker (current) | predict crowd move | **Loses** (adverse selection + lag + fees) |
+| Naive maker MM (post both sides) | spread + rebate | **Loses** (~0.44 bp/RT adverse selection > rebate) |
+| Queue/flow-aware MM | read depth + cancel before adverse fill | **Possible edge**, needs depth streams + <100ms loop |
+| Triangular/cross-exchange arb | price dislocation across venues/pairs | **Real edge** where it exists, but thin + latency-bound |
+| Latency arb / co-located maker | speed inside exchange | **Impossible** for us (Tencent Cloud, no co-lo) |
+
+The only strategies with a *structural* (not just skill) edge for a non-co-lo
+retail bot are **(a) cross-exchange / triangular arbitrage** (exploits real
+price differences, not predictions) and **(b) flow/queue-aware execution**
+(exploits the *same* microstructure the HFTs use, but from outside — possible
+only with full depth data and fast cancellation).
+
+## B.5 Binance depth streams (what we are MISSING for any of this)
+
+Our `feed.py` subscribes to `aggTrade`, `bookTicker` (best bid/ask, **no
+size**), `markPrice`, and klines. For MM or flow trading we need:
+- `<symbol>@depth<levels>` or `<symbol>@depth` (full diff book) — the
+  `diff_book_depth` / `depth` WS streams. These deliver level-2 updates at up
+  to **100ms** frequency (`@depth@100ms`). The academy tutorial shows the
+  snapshot+diff resync pattern.
+- With depth we can compute **real order-flow imbalance** (signed size per
+  side) and **queue position** — the actual signals B.1 says separate good
+  fills from bad.
+- Latency reality: a single multiplexed WS in Tencent Cloud to
+  `wss://fapi.binance.com` has RTT of tens of ms. That is fine for MM on
+  liquid pairs (where HFTs also operate at ~ms), but we will *lose* the
+  front-of-queue race to co-located firms. Acceptable for a learning bot;
+  not for profit at scale.
+
+## B.6 Revised recommendation (honest)
+
+1. **The current directional taker bot should stay a paper risk-sandbox.**
+   It is safe and well-built; it is not a growth engine. Stop expecting it to
+   grow.
+2. **Do NOT naively "switch to maker."** Research proves that loses too.
+3. **If we want real edge, build ONE of:**
+   - **Triangular arb scanner** across the 15 pairs we already track (single
+     exchange, atomic, ~100% fill win rate when math is positive). Lowest
+     latency bar, clearest edge, matches val's "buy and sell at once."
+   - **Flow/queue-aware MM** (Phase B/C from Part A) — but only after adding
+     `@depth@100ms` streams and a cancellation policy informed by B.1's queue
+     regimes. This is the hard, legitimate "real-time scalping" path.
+4. **Reframe the goal.** "Grow the balance no matter win or loss" is only
+   achievable by *earning a structural spread or rebate or dislocation*, not
+   by predicting the crowd. The bot must become a *liquidity/arb* bot, not a
+   *prediction* bot.
+5. **Be honest in notifications** about expected expectancy: a flow-aware bot
+   wins on fill *quality*, not on a 55% coin-flip.
+
+## B.7 Concrete next-step spec (if val approves)
+
+- Add `depth_streams` to `FeedMux`: `<pair>@depth@100ms` for N liquid pairs.
+  Maintain a local book (snapshot + diff resync per Binance academy pattern).
+- Prototype `wave/arb.py`: read all 15 pairs' mid from the local books, scan
+  for triangular cycles (A→B→C→A) where the product of implied prices > 1 +
+  fees + epsilon. Fire only when positive. Start paper.
+- Keep `paper_wallet` but add a `maker_rebate` field (0 at our tier) so the
+  accounting is honest about rebate reality.
+- Reuse `KillSwitch`/`ModeGuard` for inventory/balance limits in the arb bot
+  (catastrophic-loss surface = a leg fails and leaves directional exposure).
+
+*This research does not yet change deployed code. It changes the STRATEGY
+direction. Pending val's go-ahead before any rebuild. Cron remains paused.*
+
+---
+
+## Appendix — Sources (for traceability)
+
+- Shestopaloff (2025), "Navigating the Fill Probability vs. Post-Fill Returns
+  Trade-Off", arXiv:2502.18625 — Market Maker's Dilemma, Binance one-tick
+  spread, adverse selection by queue size, naive MM loses 0.44bp/RT.
+- Binance official fee schedules (futures 0.02% maker / 0.04% taker retail;
+  spot maker rebate -0.004%..-0.008% only VIP2-4).
+- Binance Academy, "Local Order Book Tutorial" — depth snapshot + diff resync.
+- Binance Developers docs — `<symbol>@depth<levels>` / `<symbol>@depth` WS
+  streams, 100ms frequency.
+- quantt.co.uk / paybis.com MM guides — spread capture, inventory risk,
+  rebate reality for retail, "speed beats rebates for retail."
+- Demos "Cracks in the Pipeline" — HFT predatory trading, hunting whales,
+  flash-crash amplification.
+
+*End of Part B.*
