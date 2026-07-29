@@ -194,6 +194,26 @@ RISK_STATE: dict = {"hour": -1, "entries_hour": 0, "pair_last_entry": {},
 # mfe_r/mae_r columns that were NULL for the entire first run (instrumentation
 # fix: exit science is impossible without excursion data).
 EXCURSIONS: dict = {}
+# v0.0.34b: veto-note dedup — repetitive vetoes (session filter, pair spacing,
+# hourly throttle) fire on EVERY tick of every pair; without dedup they write
+# hundreds of identical GATED rows/hour into decisions_log (20k rows in run 1-2)
+# and spam the log. Record each (pair, veto-class) at most once per window.
+VETO_NOTE_WINDOW_S = int(os.getenv("VAISRAVANA_VETO_NOTE_WINDOW_S", "3600"))
+_VETO_NOTES: dict = {}
+
+
+def _veto_should_note(pair: str, veto: str) -> bool:
+    """True when this (pair, veto-class) hasn't been recorded in the window."""
+    key = (pair, veto.split(":", 1)[0])
+    now = time.time()
+    if now - _VETO_NOTES.get(key, 0.0) < VETO_NOTE_WINDOW_S:
+        return False
+    _VETO_NOTES[key] = now
+    # opportunistic cleanup so the dict never grows unbounded
+    if len(_VETO_NOTES) > 512:
+        for k in [k for k, v in _VETO_NOTES.items() if now - v > VETO_NOTE_WINDOW_S]:
+            del _VETO_NOTES[k]
+    return True
 
 
 def _record_loss_streak(win: bool) -> None:
@@ -1696,8 +1716,12 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                                    dec[i] if dec else None,
                                    pair_atr.get(pair, 0.0))
         if veto:
-            log.info("survival gate veto %s: %s", pair, veto)
-            _persist_decisions_log(conn, pair, dtf, state, se, "GATED", reason=veto)
+            # v0.0.34b: dedup — log + persist each (pair, veto-class) at most
+            # once per hour instead of every tick (was ~100 rows/10min of
+            # identical "session filter" GATED rows).
+            if _veto_should_note(pair, veto):
+                log.info("survival gate veto %s: %s", pair, veto)
+                _persist_decisions_log(conn, pair, dtf, state, se, "GATED", reason=veto)
             continue
         # ── v0.0.34 spread filter on REAL book data (was hardcoded 1.0) ──
         _spread = fetch_spread_bps(pair)
