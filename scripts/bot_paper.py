@@ -35,7 +35,7 @@ from sentinel import Sentinel
 from evaluation import evaluate
 from llm_research import LLMResearcher, NarrativeResearcher, ZenClient
 from config import default_surface  # noqa: E402
-from db import init_db, db_stats  # noqa: E402
+from db import init_db, db_stats, paper_stats  # noqa: E402
 from decision import DecisionOrchestrator  # noqa: E402
 from engines import MarketState  # noqa: E402
 from lifecycle import TradeLifecycle  # noqa: E402
@@ -111,6 +111,41 @@ FETCH_URL = os.getenv(
 # Optional HTTP(S) proxy for kline + Telegram fetches (urllib reads HTTP_PROXY/HTTPS_PROXY
 # only when opener is built with ProxyHandler — see _install_proxy()).
 FETCH_LIMIT = int(os.getenv("VAISRAVANA_KLINES", "600"))
+# v0.0.33: paper-account + fee model for the redesigned notifier.
+# Fake starting balance ($10); bot "runs until balance hits 0". Each open AND close
+# pays a taker fee (Binance USDⓈ-M default 0.04% per side). Fees are charged on the
+# full notional (price * size), same as real futures.
+FEE_RATE = float(os.getenv("VAISRAVANA_FEE_RATE", "0.0004"))
+# v0.0.34: paper entries are modeled as post-only LIMIT at the decision-bar
+# close (the bot already "fills" at that price) → maker fee on OPEN, taker on
+# CLOSE (SL/TP/MAXHOLD exits are stop-market). Cuts modeled round-trip ~25-50%.
+FEE_RATE_MAKER = float(os.getenv("VAISRAVANA_FEE_RATE_MAKER", "0.0002"))
+START_BALANCE = float(os.getenv("VAISRAVANA_START_BALANCE", "10.0"))
+# v0.0.33: portfolio-level exposure ceiling (goals.md: capital preservation).
+# Cap concurrent positions and total margin-used so a unified SL cascade cannot
+# wipe the $10 paper account. Tunable via env.
+MAX_OPEN_POSITIONS = int(os.getenv("VAISRAVANA_MAX_OPEN", "5"))
+MAX_TOTAL_MARGIN_PCT = float(os.getenv("VAISRAVANA_MAX_MARGIN_PCT", "50.0"))
+
+
+def paper_equity(conn, open_trades: dict, get_mark) -> dict:
+    """Equity snapshot for notifier footers.
+
+    Combines DB realized PnL (paper_stats) with live unrealized PnL from marks.
+    get_mark(pair) -> current price or None.
+    """
+    base = paper_stats(conn, start_balance=START_BALANCE, fee_rate=FEE_RATE)
+    unreal = 0.0
+    for (pair, _tf, side), t in open_trades.items():
+        mark = get_mark(pair) if get_mark else None
+        if mark is None:
+            mark = t.entry_price
+        d = 1.0 if side == "BUY" else -1.0
+        unreal += (mark - t.entry_price) * d * t.size
+    base["unrealized"] = round(unreal, 2)
+    base["equity"] = round(base["balance"] + unreal, 2)
+    return base
+
 CYCLE_S = int(os.getenv("VAISRAVANA_CYCLE_S", "60"))  # 60s = one decision per minute
 # v0.0.32: default to a local ./data dir (works on any host) instead of Fly-only /data.
 # Set VAISRAVANA_DB=/data/vaisravana.db on Fly to keep the volume behaviour.
@@ -124,8 +159,109 @@ CRON_STATE_PATH = Path(__file__).resolve().parent.parent / ".vaisravana_cron_sta
 # v0.0.19: tighter side-bleed floor + per-side threshold adj + post-SL cooldown.
 SIDE_EXP_MIN_SAMPLES = int(os.getenv("VAISRAVANA_SIDE_MIN_SAMPLES", "20"))
 SIDE_EXP_FLOOR_R = float(os.getenv("VAISRAVANA_SIDE_EXP_FLOOR", "-0.10"))
-SIDE_THRESHOLD_ADJ = float(os.getenv("VAISRAVANA_SIDE_THRESHOLD_ADJ", "0.03"))
+SIDE_THRESHOLD_ADJ = float(os.getenv("VAISRAVANA_SIDE_THRESHOLD_ADJ", "0.06"))
 SL_COOLDOWN_TICKS = int(os.getenv("VAISRAVANA_SL_COOLDOWN", "3"))
+
+# ── v0.0.34: survival-mode risk layer ────────────────────────────────────
+# Root-cause fixes from the 2026-07-28 run post-mortem ($10 → $1.49 in 10h):
+#   1. sizing scale bug — qty was computed against the static env equity
+#      ($1000) instead of the LIVE paper balance ($10), producing $956-notional
+#      ETH entries (one SL = -$6.22 = 60% of the account) next to $0.00 dust
+#      entries on pairs missing from the SymbolRegistry.
+#   2. fee bleed — 106 trades/10h at 8 bps round-trip ate $8.40 on ~breakeven
+#      gross. Gates below enforce fee-aware EV, hourly throttle, session
+#      filter, loss-streak cooldown and post-blowout-candle skip.
+# All of this is additive risk/gate layer (ParameterSurface untouched).
+MAX_NOTIONAL_X_EQUITY = float(os.getenv("VAISRAVANA_MAX_NOTIONAL_X_EQUITY", "2.0"))
+MIN_NOTIONAL_USD = float(os.getenv("VAISRAVANA_MIN_NOTIONAL_USD", "5.0"))
+# round-trip fee may consume at most this fraction of 1R (dollar risk at SL)
+FEE_R_MAX_FRAC = float(os.getenv("VAISRAVANA_FEE_R_MAX_FRAC", "0.25"))
+# TP must be at least this % move from entry (expected move >= 3x round-trip cost)
+MIN_TP_MOVE_PCT = float(os.getenv("VAISRAVANA_MIN_TP_MOVE_PCT", "0.24"))
+MAX_ENTRIES_PER_HOUR = int(os.getenv("VAISRAVANA_MAX_ENTRIES_PER_HOUR", "4"))
+PAIR_ENTRY_SPACING_S = int(os.getenv("VAISRAVANA_PAIR_ENTRY_SPACING_S", "1800"))
+SESSION_BLOCK_UTC = {int(h) for h in
+                     os.getenv("VAISRAVANA_SESSION_BLOCK_UTC", "0,1,2,3,4,5").split(",")
+                     if h.strip().isdigit()}
+LOSS_STREAK_N = int(os.getenv("VAISRAVANA_LOSS_STREAK_N", "3"))
+LOSS_STREAK_COOLDOWN_S = int(os.getenv("VAISRAVANA_LOSS_STREAK_COOLDOWN_S", "1800"))
+BIG_CANDLE_ATR_MULT = float(os.getenv("VAISRAVANA_BIG_CANDLE_ATR_MULT", "3.0"))
+
+# shared risk-layer state (single-threaded decision loop → plain dict is safe)
+RISK_STATE: dict = {"hour": -1, "entries_hour": 0, "pair_last_entry": {},
+                    "loss_streak": 0, "cooldown_until": 0.0}
+# per-trade excursion tracker {correlation_id: [mfe_r, mae_r]} — feeds the
+# mfe_r/mae_r columns that were NULL for the entire first run (instrumentation
+# fix: exit science is impossible without excursion data).
+EXCURSIONS: dict = {}
+
+
+def _record_loss_streak(win: bool) -> None:
+    """v0.0.34: anti-cluster cooldown — 3 consecutive losses pause NEW entries."""
+    if win:
+        RISK_STATE["loss_streak"] = 0
+        return
+    RISK_STATE["loss_streak"] += 1
+    if RISK_STATE["loss_streak"] >= LOSS_STREAK_N:
+        RISK_STATE["cooldown_until"] = time.time() + LOSS_STREAK_COOLDOWN_S
+        RISK_STATE["loss_streak"] = 0
+        log.info("loss-streak cooldown armed: %ds", LOSS_STREAK_COOLDOWN_S)
+
+
+def survival_gates(pair: str, entry: float, sl: float, tp: float, qty: float,
+                   equity: float, dec_bar, atr_pct: float) -> tuple[float, str]:
+    """v0.0.34 pre-entry risk gates. Returns (qty_final, "") or (0.0, veto_reason).
+
+    Order: cheap contextual vetoes first, then notional scaling vs LIVE equity,
+    then fee-aware EV checks on the scaled size.
+    """
+    import datetime as _dt
+    now = time.time()
+    hour = _dt.datetime.now(_dt.timezone.utc).hour
+    if hour in SESSION_BLOCK_UTC:
+        return 0.0, f"session filter: {hour:02d}h UTC blocked"
+    if now < RISK_STATE["cooldown_until"]:
+        return 0.0, f"loss-streak cooldown: {int(RISK_STATE['cooldown_until'] - now)}s left"
+    if RISK_STATE["hour"] != hour:
+        RISK_STATE["hour"] = hour
+        RISK_STATE["entries_hour"] = 0
+    if RISK_STATE["entries_hour"] >= MAX_ENTRIES_PER_HOUR:
+        return 0.0, f"hourly throttle: {RISK_STATE['entries_hour']} entries this hour"
+    last = RISK_STATE["pair_last_entry"].get(pair, 0.0)
+    if now - last < PAIR_ENTRY_SPACING_S:
+        return 0.0, f"pair spacing: last {pair} entry {int(now - last)}s ago"
+    # post-blowout-candle skip: adverse selection + liquidation noise right
+    # after a bar > BIG_CANDLE_ATR_MULT x ATR.
+    if dec_bar is not None and atr_pct > 0:
+        rng_pct = (dec_bar.h - dec_bar.l) / (dec_bar.c or 1.0) * 100.0
+        if rng_pct > BIG_CANDLE_ATR_MULT * atr_pct:
+            return 0.0, f"big-candle skip: bar range {rng_pct:.2f}% > {BIG_CANDLE_ATR_MULT:.0f}x ATR {atr_pct:.2f}%"
+    if entry <= 0 or qty <= 0:
+        return 0.0, "invalid entry/qty"
+    # ── notional scale vs LIVE equity ──
+    cap = MAX_NOTIONAL_X_EQUITY * max(equity, 0.0)
+    if cap <= 0:
+        return 0.0, "no equity left"
+    notional = qty * entry
+    if notional > cap:
+        qty = cap / entry
+        notional = cap
+    if notional < MIN_NOTIONAL_USD:
+        if MIN_NOTIONAL_USD > cap:
+            return 0.0, f"cannot size: min ${MIN_NOTIONAL_USD:.0f} notional > cap ${cap:.2f} (2x equity)"
+        qty = MIN_NOTIONAL_USD / entry
+        notional = MIN_NOTIONAL_USD
+    # ── fee-aware EV gates ──
+    sl_dist = abs(entry - sl)
+    one_r_usd = sl_dist * qty
+    fee_rt = FEE_RATE * 2.0 * notional
+    if one_r_usd <= 0 or fee_rt > FEE_R_MAX_FRAC * one_r_usd:
+        return 0.0, (f"EV gate: round-trip fee ${fee_rt:.4f} > "
+                     f"{FEE_R_MAX_FRAC:.0%} of 1R ${one_r_usd:.4f}")
+    tp_move_pct = abs(tp - entry) / entry * 100.0
+    if tp_move_pct < MIN_TP_MOVE_PCT:
+        return 0.0, f"EV gate: TP move {tp_move_pct:.3f}% < {MIN_TP_MOVE_PCT}% min"
+    return qty, ""
 
 
 def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
@@ -171,6 +307,11 @@ def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
         # Layer 5: neutral HTF needs pullback XOR liquidity sweep
         if htf == "neutral" and not pullback and not getattr(state, "liq_sweep", False):
             return False, "BUY blocked: neutral HTF needs pullback or liquidity sweep"
+        # Layer 6 (v0.0.34): top-chase guard. Run 2026-07-28: trending_bull+BUY
+        # = -$6.47 at 19% WR — the bot bought extended bull tape at local tops.
+        # In trending_bull, a BUY must come on a pullback, never on extension.
+        if getattr(state, "regime", "") == "trending_bull" and not pullback:
+            return False, "BUY blocked: extended bull tape, no pullback (top-chase guard)"
         return True, ""
 
     else:  # SELL
@@ -299,6 +440,23 @@ def fetch_klines(symbol: str, tf: str, limit: int) -> list[Candle]:
     raw = json.loads(urllib.request.urlopen(url, timeout=15).read().decode())
     return [Candle(ts=r[0], o=float(r[1]), h=float(r[2]), l=float(r[3]),
                    c=float(r[4]), v=float(r[5])) for r in raw]
+
+
+def fetch_spread_bps(symbol: str) -> float | None:
+    """v0.0.34: REAL bid/ask spread from the book ticker (instrumentation fix —
+    the first run stored a hardcoded spread_bps=1.0 on every trade). Called only
+    on the entry path (max a few times/hour), never in the hot loop."""
+    import urllib.request
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol={symbol}"
+        d = json.loads(urllib.request.urlopen(url, timeout=8).read().decode())
+        bid, ask = float(d["bidPrice"]), float(d["askPrice"])
+        mid = (bid + ask) / 2.0
+        if mid <= 0:
+            return None
+        return (ask - bid) / mid * 10000.0
+    except Exception:
+        return None
 
 
 def _ema(vals: list[float], period: int) -> float:
@@ -1026,6 +1184,15 @@ def run() -> None:
                 except Exception as e:  # never let pruning break the loop
                     log.debug("decisions_log purge failed: %s", e)
             daily_loss_pct = (realized_loss_today["usd"] / equity * 100.0) if equity else 0.0
+            # v0.0.34: LIVE paper equity drives sizing. The first run sized
+            # against the static env equity ($1000) while the paper account
+            # held $10 — producing $956-notional ETH entries. Refresh from the
+            # DB each cycle; fall back to the env seed only if the read fails.
+            try:
+                _ps = paper_stats(conn, start_balance=START_BALANCE, fee_rate=FEE_RATE)
+                equity = max(float(_ps["balance"]), 0.0)
+            except Exception as _e:
+                log.debug("live equity refresh failed: %s", _e)
             # mark feed health from the latest candle we just fetched
             for pair in PAIRS:
                 for tf in decision_tfs + TFS:
@@ -1067,20 +1234,27 @@ def run() -> None:
                 t = open_trades.pop((ev.symbol, ev.tf, ev.side), None)
                 if t is None:
                     continue
-                # v0.0.24 P0-31: persist realistic fees so net expectancy is real.
-                # Same VIP0 assumption as src/backtest.py: entry maker 0.02%,
-                # exit (SL/MAXHOLD/TP) taker 0.05% on notional.
+                # v0.0.34: maker on open (post-only entry), taker on close.
                 notional = (t.entry_price or 0.0) * (t.size or 0.0)
-                fee_usd = notional * (0.0002 + 0.0005)
+                fee_usd = (FEE_RATE_MAKER * (t.entry_price or 0.0)
+                           + FEE_RATE * ev.price) * (t.size or 0.0)
+                _exc = EXCURSIONS.pop(t.correlation_id, None)
                 res = lc.close(t, exit_price=ev.price, close_reason=ev.reason,
-                               fees_usd=fee_usd)
+                               fees_usd=fee_usd,
+                               mfe_r=(_exc[0] if _exc else None),
+                               mae_r=(_exc[1] if _exc else None))
                 kill.record_close(ev.symbol, ev.tf, ev.side, win=bool(res["win"]))
+                _record_loss_streak(bool(res["win"]))
                 if realized_loss_today is not None and res["pnl_usd"] < 0:
                     realized_loss_today["usd"] += -res["pnl_usd"]
                 tel.exec_event(t.correlation_id, ev.symbol, DECISION_TF, "CLOSE",
                                side=ev.side, price=ev.price, status=ev.reason)
+                _net = res["pnl_usd"] - fee_usd
+                _get_mark = (lambda p: exchange.mark_price(p)) if exchange else None
+                _stats = paper_equity(conn, open_trades, _get_mark)
                 notifier.notify_close(ev.symbol, DECISION_TF, ev.side, ev.price,
-                                      ev.reason, res["r_multiple"], bool(res["win"]))
+                                      ev.reason, res["r_multiple"], bool(res["win"]),
+                                      fee_usd=fee_usd, net_usd=_net, stats=_stats)
                 # v0.0.19: post-SL cooldown — skip next N entries on (pair, side) after SL
                 if ev.reason == "SL":
                     cd_key = (ev.symbol, ev.side)
@@ -1093,6 +1267,12 @@ def run() -> None:
                     continue
                 unrealized_r = (price - trade.entry_price) / abs(trade.entry_price - trade.sl_price) \
                     if trade.side == "BUY" else (trade.entry_price - price) / abs(trade.entry_price - trade.sl_price)
+                # v0.0.34: excursion tracking — persist real MFE/MAE at close
+                # (instrumentation fix: both columns were NULL all of run 1).
+                _exc = EXCURSIONS.get(trade.correlation_id)
+                if _exc is not None:
+                    _exc[0] = max(_exc[0], unrealized_r)
+                    _exc[1] = min(_exc[1], unrealized_r)
                 old_sl = trade.sl_price
                 if trade.side == "BUY" and unrealized_r >= 0.5 and old_sl < trade.entry_price:
                     new_sl = trade.entry_price * 0.9999  # very slight buffer
@@ -1339,10 +1519,12 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                      (t.side == "SELL" and bar.h >= t.sl_price)
             if hit_tp:
                 _close(pair, dtf, t.side, t.tp_price, "TP", conn, lc, tel, kill,
-                       notifier, open_trades, loss_book=loss_book, excluder=excluder)
+                       notifier, open_trades, loss_book=loss_book, excluder=excluder,
+                       exchange=exchange)
             elif hit_sl:
                 _close(pair, dtf, t.side, t.sl_price, "SL", conn, lc, tel, kill,
-                       notifier, open_trades, loss_book=loss_book, excluder=excluder)
+                       notifier, open_trades, loss_book=loss_book, excluder=excluder,
+                       exchange=exchange)
             continue  # this strategy already has a position; move to the next profile
 
         # kill-switch gate (real daily-loss + feed-health, doc 30 §7) — checked once per tick
@@ -1491,12 +1673,50 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         if pair_w != 1.0:
             qty *= pair_w
             log.debug("pair weight %s=%.2f qty=%.4f", pair, pair_w, qty)
+        # v0.0.33: portfolio-level risk cap (goals.md: capital preservation).
+        # Refuse NEW entries once we hit the global position count or total margin
+        # exposure ceiling — 19 concurrent positions on a $10 account would allow
+        # ~95% account risk if all SL at once. Cap both count and margin-used.
+        _open_n = len(open_trades)
+        if _open_n >= MAX_OPEN_POSITIONS:
+            log.info("portfolio cap: %d positions >= MAX_OPEN_POSITIONS %d — skip %s",
+                     _open_n, MAX_OPEN_POSITIONS, pair)
+            continue
+        _used_margin = sum(
+            (t.entry_price or 0.0) * (t.size or 0.0) / max(getattr(t, "leverage", 1) or 1, 1)
+            for t in open_trades.values())
+        _new_margin = (entry * qty) / max(lev_used, 1)
+        if (_used_margin + _new_margin) > MAX_TOTAL_MARGIN_PCT / 100.0 * equity:
+            log.info("portfolio cap: margin %.2f + %.2f > %.1f%% of equity %.2f — skip %s",
+                     _used_margin, _new_margin, MAX_TOTAL_MARGIN_PCT, equity, pair)
+            continue
+        # ── v0.0.34 survival gates: session/throttle/cooldown/big-candle vetoes,
+        # then notional rescale vs LIVE equity, then fee-aware EV checks. ──
+        qty, veto = survival_gates(pair, entry, sl, tp, qty, equity,
+                                   dec[i] if dec else None,
+                                   pair_atr.get(pair, 0.0))
+        if veto:
+            log.info("survival gate veto %s: %s", pair, veto)
+            _persist_decisions_log(conn, pair, dtf, state, se, "GATED", reason=veto)
+            continue
+        # ── v0.0.34 spread filter on REAL book data (was hardcoded 1.0) ──
+        _spread = fetch_spread_bps(pair)
+        if _spread is not None and _spread > 5.0:
+            log.info("spread gate %s: %.2f bps > 5 — skip", pair, _spread)
+            _persist_decisions_log(conn, pair, dtf, state, se, "GATED",
+                                   reason=f"spread {_spread:.2f}bps > 5")
+            continue
         trade = lc.open(correlation_id=corr_id, pair=pair, tf=dtf,
                         side=se.side, entry_price=entry, size=qty,
                         leverage=lev_used, sl_price=sl, tp_price=tp,
-                        decision_id=corr_id, spread_bps=state.spread_bps,
+                        decision_id=corr_id,
+                        spread_bps=(_spread if _spread is not None else state.spread_bps),
                         regime=state.regime, scores=se.sub_scores.as_dict())
         open_trades[(pair, dtf, se.side)] = trade
+        # v0.0.34: risk-layer bookkeeping + excursion tracker seed
+        RISK_STATE["entries_hour"] += 1
+        RISK_STATE["pair_last_entry"][pair] = time.time()
+        EXCURSIONS[corr_id] = [0.0, 0.0]
         sl_state = place_stop_loss(exchange, pair, se.side, qty, sl) if exchange else None
         if monitor is not None:
             monitor.track(Position(
@@ -1509,20 +1729,33 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             ))
         tel.exec_event(corr_id, pair, dtf, "FILL", order_type="LIMIT",
                        side=se.side, price=entry, qty=qty, status="FILLED")
-        notifier.notify_fill(pair, dtf, se.side, entry, sl, tp, surface.max_leverage,
-                             strategy=profile.name)
+        # v0.0.34: post-only LIMIT entry → maker fee on open (taker only on close)
+        _fee_open = FEE_RATE_MAKER * entry * qty
+        _mark = cache.get(dtf, [None])[-1].c if cache.get(dtf) else entry
+        _stats = paper_equity(conn, open_trades,
+                               lambda p: (_mark if p == pair else entry))
+        notifier.notify_fill(pair, dtf, se.side, entry, sl, tp, lev_used,
+                             conf=getattr(se, "confidence_pct", 0.0),
+                             fee_usd=_fee_open, size=qty, stats=_stats)
         # v0.0.23 T3: record the entry side for SELL-share balancing.
         if side_balancer is not None:
             side_balancer.record(se.side)
 
 
 def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,
-           open_trades, loss_book=None, excluder=None):
+           open_trades, loss_book=None, excluder=None, exchange=None):
     t = open_trades.pop((pair, tf, side), None)
     if t is None:
         return
-    res = lc.close(t, exit_price=exit_price, close_reason=reason)
+    # v0.0.34: maker on open, taker on close + record excursion data (mfe/mae)
+    _fee = FEE_RATE_MAKER * t.entry_price * t.size + FEE_RATE * exit_price * t.size
+    _exc = EXCURSIONS.pop(t.correlation_id, None)
+    res = lc.close(t, exit_price=exit_price, close_reason=reason,
+                   fees_usd=_fee,
+                   mfe_r=(_exc[0] if _exc else None),
+                   mae_r=(_exc[1] if _exc else None))
     kill.record_close(pair, tf, side, win=bool(res["win"]))
+    _record_loss_streak(bool(res["win"]))
     # v0.0.23 T2 / v0.0.24 P0-31: feed the close into the pair excluder.
     # Pass `conn` so the excluder uses NET expectancy$ (after fees) — the real
     # economic signal — instead of the raw W/L fallback.
@@ -1542,8 +1775,13 @@ def _close(pair, tf, side, exit_price, reason, conn, lc, tel, kill, notifier,
         loss_book["usd"] += -res["pnl_usd"]
     tel.exec_event(t.correlation_id, pair, tf, "CLOSE", side=side,
                    price=exit_price, status=reason)
+    _fee_total = _fee
+    _net = res["pnl_usd"] - _fee_total
+    _get_mark = (lambda p: exchange.mark_price(p)) if exchange else None
+    _stats = paper_equity(conn, open_trades, _get_mark)
     notifier.notify_close(pair, tf, side, exit_price, reason, res["r_multiple"],
-                          bool(res["win"]))
+                          bool(res["win"]), fee_usd=_fee_total, net_usd=_net,
+                          stats=_stats)
     rep = evaluate(conn, pair, tf, side)
     if rep.n_trades >= 20 and rep.all_pass:
         notifier.notify_promotion(pair, tf, "SHADOW READY",

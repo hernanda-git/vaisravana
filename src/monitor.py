@@ -20,7 +20,13 @@ from dataclasses import dataclass, field
 from execution import Exchange, OrderDraft, OrderResult, StopLossState
 
 ORPHAN_AGE_S = 30 * 60          # doc 30 §3: >30m with no orders → orphan
-MAX_HOLD_BY_TF = {"5m": 5 * 60, "10m": 10 * 60, "15m": 15 * 60}   # doc 30 §3 max-hold = TF
+# doc 30 §3 max-hold = TF. v0.0.34: explicit 1m budget of 45 min — the old
+# 15-min default made the surface's 2R TP statistically unreachable on 1m
+# entries (9/106 TP hits in run 1); the +0.5R breakeven trail bounds the
+# extra downside of holding longer. Env-overridable for tuning.
+import os as _os
+MAX_HOLD_BY_TF = {"1m": int(_os.getenv("VAISRAVANA_MAX_HOLD_1M_S", str(45 * 60))),
+                  "5m": 5 * 60, "10m": 10 * 60, "15m": 15 * 60}
 
 
 @dataclass
