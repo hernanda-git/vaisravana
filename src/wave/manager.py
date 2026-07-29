@@ -108,6 +108,16 @@ class WaveManager:
             log.debug("open rejected: %s in cooldown", key)
             return None
 
+        # iter-9: never stack a duplicate wave on an already-live (pair, side).
+        # on_tick calls open() every tick; without this, a live wave's same
+        # pair+side re-opens every tick, each charging a phantom open fee
+        # (run13 leaked 378 fee-events from 27 real opens -> 360 fake trades).
+        for w in self.waves.values():
+            if w.pair == candidate.pair and w.side == candidate.side \
+                    and w.state in (WaveState.ENTERED, WaveState.SURFING):
+                log.debug("open rejected: %s already live", key)
+                return None
+
         # Guard: never open with a zero/unknown price (ctx not seeded yet).
         if not ctx.price or ctx.price <= 0:
             log.debug("open skipped: ctx.price=%.4f not ready", ctx.price)
@@ -192,15 +202,18 @@ class WaveManager:
         wave.tp_price = (wave.entry_price + tp_dist) if candidate.side == "BUY" \
             else (wave.entry_price - tp_dist)
 
-        # Charge the open taker fee (paid on notional at entry).
-        if wallet is not None:
-            wallet.charge_open_fee(notion)
-
         # Cap total open waves so we don't over-trade (and burn the
         # paper balance on fees). Skip new entries past the cap.
         if len(self.waves) > MAX_OPEN_WAVES:
             log.info("open skipped: %d open waves (cap %d)", len(self.waves), MAX_OPEN_WAVES)
             return None
+
+        # iter-9: charge the open taker fee ONLY after the wave is accepted
+        # (past the live-dup guard above AND the cap above). Charging before
+        # the cap caused cap-rejected waves to pay a phantom fee (360 fake
+        # trades in run13). Now a fee is paid exactly once per real opening.
+        if wallet is not None:
+            wallet.charge_open_fee(notion)
 
         wave.state = WaveState.SURFING
         self.waves[wave.wave_id] = wave

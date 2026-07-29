@@ -313,6 +313,49 @@ distribution for evidence.
   This is the DOMINANT loss (8% of $10 in 21 min), far bigger than exits.
   Tracked as iter-9 (the real lever), not iter-8.
 
+---
+
+## ITER-9 — fix fee-bleed (charge fee once per real open)
+- Hypothesis (from iter-8 wallet anomaly): `manager.open()` charged the open
+  fee BEFORE the MAX_OPEN_WAVES cap, and had NO guard against re-opening an
+  already-live (pair, side). on_tick calls open() every tick, so while 8
+  waves were live the engine stacked duplicate waves (WIFUSDT SELL opened 7x
+  in run13) and charged a phantom open fee on every rejected attempt. That
+  produced 378 fee-events from 27 real opens -> wallet trades=360,
+  fees_paid=$0.79 (8% of $10 in 21 min). The dominant loss was fees, not R.
+- Change: manager.py open() — (a) reject if (pair, side) already has a live
+  wave (ENTERED/SURFING); (b) charge open fee only AFTER the cap passes.
+  No signal/gate/exit change. Pure accounting fix.
+- Test: run14 (+ run14b extension), fresh $10, ~21 min combined window.
+- Evidence: 13 opens -> 13 fee(open) events -> wallet trades=13,
+  fees_paid=$0.044 (was $0.79 in run13 for the same volume: 18x less).
+  Close reasons: 17 max_age, 0 loss_cut, 0 anchor (no deep losers appeared
+  this tape). avg_final_r -0.016 (run13 -0.151), worst_r -0.09 (run13 -0.52),
+  win>0 7/17 (41%). Balance $9.93 after 21 min vs $8.94 run13. net_pnl
+  ~-$0.03 (run13 -$0.27). The bot is now essentially BREAK-EVEN pre-fee and
+  the account no longer bleeds out on phantom fees.
+- Verdict: KEEP. Largest single survival win of the loop. Fees are now
+  truthful (1 fee per real open/close). Net PnL flipped from -$0.27 to
+  -$0.03; the strategy is now expectancy-limited, not fee-limited.
+- Note on peak_r: avg_peak_r dropped to ~0.03 (was 0.10) because the bot
+  now takes FEWER, cleaner waves (no tick-stacking) and the tape is quiet.
+  Still 0 tp_hit anywhere — TP (2xATR) is unreachable in 600s. Next lever.
+
+## Loop state (end of iter-9)
+- Baseline for iter-10: run14/14b = $9.93 @21min, fees_paid $0.044 (truthful),
+  13 opens, 17 closes (all max_age), avg_final_r -0.016, win>0 41%.
+- Standing questions (updated):
+  1. TP UNREACHABLE (P0): 0 tp_hit across ALL runs; avg_peak_r ~0.03-0.10
+     but TP = 2xATR (~0.5-2% move). Either lower TP to ~0.5xATR so winners
+     bank, OR extend MAX_WAVE_AGE_S so a 2xATR move has time. The bot cannot
+     grow without hitting its own target.
+  2. NOTIFICATION FOOTER (your note): Entry/SL/TP show 0.0 on open and the
+     balance/used/unrealized/realized footer is missing. build_wave_card()
+     exists but /wave isn't wired to it; open notifications send entry=0.0
+     because wave.entry_price may be set after the notify call. Fix wiring.
+  3. Keep fee accounting as-is (fixed). Watch that live (pair,side) guard
+     doesn't accidentally block legitimate re-entries after a cooldown.
+
 ## Loop state (end of iter-8)
 - Baseline for iter-9: run13 = $8.94 @21min, fee-reality $0.79/360-ticks,
   27 opens, 2 loss_cut, 0 tp_hit, avg_final_r -0.15.
