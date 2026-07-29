@@ -83,7 +83,7 @@ log = logging.getLogger("vaisravana.bot")
 
 _install_proxy_opener()
 
-from symbols import SymbolRegistry  # noqa: E402
+from symbols import SymbolRegistry, SymbolInfo  # noqa: E402
 from marketdata import FeedHealth  # noqa: E402
 from mode import ModeGuard, PaperSimExchange  # noqa: E402
 from monitor import PositionMonitor, Position  # noqa: E402
@@ -889,6 +889,36 @@ def run() -> None:
     open_trades: dict[tuple, object] = lc.get_open_positions()
     ver = vmod.read_version()
     registry = SymbolRegistry()
+    # v0.0.36: populate the registry from Binance exchangeInfo at boot.
+    # It was constructed EMPTY forever — registry.get(pair) returned None for
+    # every pair, so sizing always fell into the qty=1.0 fallback (the bug that
+    # opened 1 BTC / $64k notional on a $10 account). With real tick/step/
+    # minNotional filters, size_position() maths is exchange-accurate.
+    try:
+        import urllib.request as _ureg
+        import json as _jreg
+        with _ureg.urlopen(
+                "https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=15) as _r:
+            _xinfo = _jreg.load(_r)
+        _infos = []
+        for _s in _xinfo.get("symbols", []):
+            if _s.get("quoteAsset") != "USDT" or _s.get("status") != "TRADING":
+                continue
+            _fs = {f["filterType"]: f for f in _s.get("filters", [])}
+            _infos.append(SymbolInfo(
+                symbol=_s["symbol"],
+                price_precision=int(_s.get("pricePrecision", 2)),
+                qty_precision=int(_s.get("quantityPrecision", 0)),
+                tick_size=float(_fs.get("PRICE_FILTER", {}).get("tickSize", 0.01)),
+                step_size=float(_fs.get("LOT_SIZE", {}).get("stepSize", 1.0)),
+                min_qty=float(_fs.get("LOT_SIZE", {}).get("minQty", 0.0)),
+                min_notional=float(_fs.get("MIN_NOTIONAL", {}).get("notional", 5.0)),
+            ))
+        registry.bulk_load(_infos)
+        log.info("SymbolRegistry loaded %d USDT perpetuals from exchangeInfo", len(_infos))
+    except Exception as _e:
+        log.warning("SymbolRegistry bootstrap failed (%s) — sizing will skip all "
+                    "entries until registry is populated", _e)
     feed = FeedHealth(max_age_s=max(30.0, CYCLE_S * 1.5))
 
     # v0.0.21: register bot commands so / shows a hint list in Telegram
