@@ -318,3 +318,115 @@ direction. Pending val's go-ahead before any rebuild. Cron remains paused.*
   flash-crash amplification.
 
 *End of Part B.*
+
+---
+
+# PART C — Agentic Brainstorm Synthesis + Decisive Roadmap (2026-07-29)
+
+This part distills a parallel multi-agent brainstorming (adversarial quant /
+practitioner / lead architect) PLUS two prior research docs found on sera
+(`/root/scalping_bot_research.md` and `vaisravana-workspace/vaisravana/docs/`)
+PLUS live measurement. Consensus below is strong; disagreements noted.
+
+## C.1 What all lenses agree on
+
+1. **The bot has ~zero net edge per trade.** Measured (run-1: $10→$1.49, 106
+   trades, 45% WR, fees −$8.40; run12-16: avg R ~0). This is the root fact.
+2. **It trades ~10× too often.** At gross≈breakeven, fees scale linearly with
+   count. Cutting count is the cheapest, highest-ROI lever — pure additive,
+   no new alpha needed.
+3. **Directional taker + naive maker MM both lose** (adverse selection;
+   Market Maker's Dilemma, arXiv 2502.18625; Binance spread ~1 tick).
+4. **Arb (triangular/cross-exchange) is real but thin + latency-bound:**
+   ~18 profitable opp/week for a regular Binance trader, ~0.025% each, needs
+   <146ms execution, most last <1s. At our VPS RTT we are last in line.
+5. **Funding-rate carry is the least-bad structural edge** — but needs
+   $10-25k capital (Architect + Skeptic agree). OUT OF REACH at our $10 paper
+   account. So at our size, NO strategy class is currently viable for growth;
+   the goal becomes *survival + cost discipline + honest measurement*, not
+   "grow fast."
+
+## C.2 The decisive reframe (changes my earlier "rewrite to arb" advice)
+
+My Part B said "build the triangular arb scanner." The deeper research +
+brainstorm REJECTS that for our constraints:
+- At $10, arb/funding are capital-gated (C.1.4/5). Rewriting to arb now is
+  building a strategy we cannot capitalize.
+- The highest-ROI move is NOT a strategy rewrite — it is **cost discipline +
+  selection quality + honest measurement**, achievable by ADDITIVE gates on the
+  EXISTING engine (respecting the Sentinel constraint: only ParameterSurface
+  mutable, never engine/StrategyProfile).
+- The earlier `/root/scalping_bot_research.md` (15 techniques) and the
+  architect's `docs/01-architecture.md` (phases R1-R7) already specify exactly
+  this. We are not starting from zero — there is a documented roadmap.
+
+## C.3 Prior docs already on sera (do not reinvent)
+
+- `/root/scalping_bot_research.md` — 15 prioritized pro-desk techniques. Top
+  ROI: #2 fee-aware EV gate, #4 trade-frequency throttle, #5 spread filter,
+  #6 vol-regime gate, #3 MFE-based TP. These cut fee bleed ~75-85% with no new
+  alpha. Priority order given: 2,4,5,3,6,7,1,8,11,9,10,15,12,13,14.
+- `vaisravana-workspace/vaisravana/docs/01-architecture.md` — 9-layer target
+  architecture + 7-phase build plan (R1 measurement honesty → R2 kill
+  freeze/bleed → R3 exit geometry → R4 selection → R5 maker+OFI alpha →
+  R6 CEO automation → R7 observability). Respects Sentinel constraint
+  (ParameterSurface-only mutation behind walk-forward/Monte-Carlo promotion
+  gates). THIS is the build plan.
+
+## C.4 Where the agents DISAGREE (and the resolution)
+
+- Skeptic: "kill arb/MM, do funding carry." But funding needs $10-25k → moot
+  at $10. Resolution: funding carry is the *north-star* edge for when capital
+  exists; until then, optimize the existing bot's cost structure.
+- Practitioner/Architect: "pairs/cointegration stat-arb shows positive Sharpe
+  but goes negative after 0.08% costs on Binance perps (copula study)." So even
+  stat-arb is fee-fragile at our size. Resolution: not a near-term build; the
+  cost-gate path comes first and is prerequisite to making ANY strategy viable.
+- All agree the immediate action is **cost control + honest metrics**, not a
+  rewrite. This is the disciplined answer to val's "grow the balance" — you
+  cannot grow what you cannot measure and what bleeds fees faster than it
+  earns.
+
+## C.5 DECISIVE ROADMAP (what I will build next, in the loop)
+
+Per the charter (00-goals.md: continuous self-improving loop, swarm
+intelligence, Red Team) and the Sentinel constraint, the next iterations are
+ADDITIVE ParameterSurface / gate changes, validated on paper, committed, with
+the autonomous cron resumed only after a clean baseline:
+
+- **iter-12 (R1 measurement honesty):** add `mfe_r/mae_r/spread_bps/regime` to
+  wave_log non-NULL; add an `append_excursion` flush. Kills the lying metrics.
+- **iter-13 (R2 fee-aware EV gate + throttle):** additive `survival_gates()`
+  before open: require E[move] ≥ 2-3× round-trip cost; global cap ~4
+  trades/h; per-pair 30min spacing; session block 00-05 UTC; spread gate
+  (>5bps skip). Expected: fee bleed −75%, no edge loss. HIGHEST ROI.
+- **iter-14 (R3 MFE-based TP):** TP at ~60-70th pct of historical MFE instead
+  of fixed R; BE-trail at +0.5R. Fixes the 0-tp_hit problem.
+- **iter-15 (R4 net-expectancy scoreboard):** rank pairs by net expectancy/
+  trade, trade top-N of 15; reset-vs-lower-floor logic.
+- **iter-16 (R5 maker entries + OFI):** post-only maker entry @ touch (2-5s
+  TIF, cancel-if-unfilled); depth ws → OFI gate (ρ>±0.2); funding-aware skip.
+  Real new alpha, gated by paper A/B.
+- **Later:** R6 CEO automation (orchestrator promotes ParameterSurface diffs
+  behind walk-forward/Monte-Carlo gates); R7 observability/alerts.
+
+Each iter follows RUN_LOOP discipline (clean deploy → validate → compare →
+log → commit/push). One change at a time. The cron resumes only when the
+baseline is clean and the new gate is proven non-harmful.
+
+## C.6 Honest bottom line for val
+
+"Grow the balance fast" is not achievable at $10 with any strategy class
+currently available to a non-co-located retail bot — every class loses to fees
+or adverse selection or latency at this size. The *disciplined* path that the
+research and the brainstorm all converge on is: **stop the bleed, measure
+honestly, trade fewer/better, then add microstructure alpha, and keep the
+continuous-improvement loop running.** That is what actually compounds. The
+funding-rate carry strategy is the real "buy and sell at once" growth engine —
+but it needs ~$10-25k, not $10. When/if capital arrives, that is the pivot.
+
+*Part C supersedes the "build arb now" suggestion in Part B. Cron remains
+paused pending val's go-ahead on iter-12+. All brainstorming artifacts saved:
+/root/arb_mm_thesis_kill_analysis.md (skeptic),
+vaisravana-workspace/vaisravana/docs/01-architecture.md (architect),
+/root/scalping_bot_research.md (prior).*
