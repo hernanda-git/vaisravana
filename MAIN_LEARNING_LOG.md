@@ -150,3 +150,14 @@ Success criteria for the KEEP verdict (measure after >=24h / >=30 trades):
 - FLIP exits show smaller avg loss than SL exits
 - mfe_r/mae_r populated -> feeds TP retune in iter 5
 
+First run-2 trade (2026-07-29 06:00 UTC, ~2min after v0.0.35 deploy):
+INJUSDT SELL 15m in trending_bear — exactly the proven bucket. Notional
+$5.00 (vs run-1's $956 ETH bomb), lev 3x, SL risk $0.027, RR 2.38, real
+spread 2.21 bps recorded. Every structural fix visible in one row.
+
+All research artifacts archived in research/ (see research/README.md for
+the index + implementation backlog). Next iteration: pull run-2 trade data
+(>=30 closed trades), grade each v0.0.35 change KEEP/REJECT, implement TP
+retune from realized mfe_r percentiles, work down the backlog.
+
+
