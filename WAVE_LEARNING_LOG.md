@@ -285,3 +285,48 @@ distribution for evidence.
   2. Still 0 tp_hit. After loss-cut, revisit TP 1.5xATR or trail after 0.5R.
   3. Startup burst opens 9 waves in 15s at whatever conf clears 0.12 floor.
      Consider a warmup delay (no opens first 60-120s) so EMAs/ctx seed first.
+
+---
+
+## ITER-8 — hard loss-cut exit (live_r <= -0.5 => close, reason=loss_cut)
+- Hypothesis (standing Q1 of iter-7): run12 had two losers bleed to -0.57/-0.60R
+  and sit at max_age because reversal 0b never armed (peak < 0.2R). A hard
+  loss-cut at -0.5R caps per-wave tail risk at half the SL distance. Pure loss
+  protection: fires only when live_r <= -0.5, can never touch a winner, cannot
+  raise frequency or fees.
+- Change: manager.py rule 0c: `live_r <= -LOSS_CUT_R (0.5)` => CLOSE
+  reason=loss_cut. Placed after reversal 0b, before anchor_hit.
+- Test: run13, fresh $10, ~21 min window, build --no-cache + force-recreate.
+  NOTE: two cron ticks overlapped this iteration; the second tick re-deployed
+  at 02:17:51 UTC and wiped the first measured window mid-run. run13 = the
+  second, clean window (single container, restarts=0).
+- Evidence: 19 opens (bias mix 11 bearish / 8 bullish — healthy), 10 closes:
+  2 loss_cut, 7 max_age, 1 anchor_hit. THE RULE FIRED AND WORKED: both PEPE
+  shorts cut at exactly -0.50/-0.52R instead of riding toward full SL
+  (run12 equivalents: -0.57/-0.60R held 15 min). anchor_hit closed at 0.00R
+  (PUMP peaked 0.34, breakeven trail caught it — trail works). One winner
+  TAO +0.49R max_age. Balance $9.00 @21min vs run12 $8.94 @21.6min; fees
+  $0.746 vs $0.968 (fee/min $0.036 vs $0.045, improved). avg R -0.26 vs
+  run12 -0.12, but the delta is 7 max_age closes at -0.35..-0.47R in a bleed
+  tape — untouched by this change (loss_cut only ran on 2 waves and improved
+  both). Loss 10.0% @21min, well inside the 30% reject line. No crash.
+- Verdict: KEEP. The exact failure mode it targeted (deep loser held to
+  max_age) is gone; tail risk per wave is now capped at ~0.5R; balance and
+  fee drag both slightly better than baseline. New baseline = run13.
+
+## Loop state (end of iter-8)
+- Baseline for iter-9 comparison: run13 = $9.00 @21min, fee $0.746, 19 opens,
+  1/10 positive, closes: 7 max_age / 2 loss_cut / 1 anchor_hit, avg R -0.26.
+- Standing questions (updated):
+  1. STAGNANT MID-LOSERS: 7 max_age closes sat at -0.35..-0.47R for 15 min —
+     below the -0.5 loss-cut, above nothing. Candidate: time-stop for stale
+     losers (age > ~300s AND live_r <= -0.25 => close) so dead waves free
+     margin sooner. Must not clip young waves that recover.
+  2. Still 0 tp_hit. TAO peaked +0.49 and got lucky at max_age; PUMP peaked
+     +0.34 and decayed to breakeven anchor. Consider banking partial at
+     peak_r >= 0.3 (trail to +0.15R instead of breakeven) so peaked winners
+     pay something.
+  3. Startup warmup delay (no opens first 60-120s) still untested.
+  4. PROCESS: cron ticks can overlap (tick 2 wiped tick 1's measured window
+     mid-run this iter). Consider a lock file or checking container age
+     before re-deploying.

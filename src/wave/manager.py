@@ -26,6 +26,12 @@ COOLDOWN_S = 600.0           # wall-clock seconds before same (pair, side) can r
 # 40s in run11). Wall-clock expiry makes the cooldown deterministic: 10 min.
 MAX_OPEN_WAVES = int(os.getenv("VAISRAVANA_MAX_OPEN_WAVES", "8"))  # hard cap on concurrent waves (fee-bleed guard)
 BREAKEVEN_FLOOR_R = 0.3      # once peak_r >= this, SL moves to breakeven (tight enough to actually lock 0)
+LOSS_CUT_R = 0.5             # iter-8: hard loss-cut at -0.5R. Two run12 losers bled to
+                              # -0.57/-0.60R and sat at max_age (reversal 0b never armed
+                              # because peak never reached 0.2R). Cutting at half-loss
+                              # caps per-wave tail risk at 0.5R instead of the full 1.0R SL.
+                              # Pure loss protection: only fires when live_r <= -0.5, so it
+                              # can NEVER touch a winner and cannot raise frequency or fees.
 FLIP_STRENGTH = 0.30         # bias strength needed to confirm a flip
 PARTIAL_FRAC = 0.35          # fraction to trim on stall
 MAX_WAVE_AGE_S = int(os.getenv("VAISRAVANA_MAX_WAVE_AGE_S", "900"))  # force-close a wave after 15m if nothing else exits it (anti-stuck; prod floor)
@@ -331,6 +337,14 @@ class WaveManager:
         # a 0.2 peak-lock would have banked those round-trips near scratch.
         if wave.peak_r >= 0.2 and wave.live_r < 0:
             return WaveAction(type="CLOSE", reason="reversal", wave=wave, price=tick.price)
+
+        # 0c. Hard loss-cut: if the wave is down >= 0.5R, close immediately.
+        # Pure loss protection — only fires when live_r <= -0.5, so it can NEVER
+        # close a winner. Catches losers that never peaked >=0.2R (so reversal 0b
+        # never armed) but bled to half-loss; without this they ride to max_age
+        # near the full 1.0R SL. iter-8: run12 had two such losers at -0.57/-0.60R.
+        if wave.live_r <= -LOSS_CUT_R:
+            return WaveAction(type="CLOSE", reason="loss_cut", wave=wave, price=tick.price)
 
         # 1. Anchor hit (price crossed SL)
         if wave.side == "BUY" and tick.price <= wave.sl_price:
