@@ -21,3 +21,10 @@ Thumbs.db
 
 # Fetched klines (regenerable via scripts/fetch_klines_via_gateway.py)
 data/klines/
+
+# secrets
+.env
+.env.*
+!.env.example
+*.session
+sessions/
