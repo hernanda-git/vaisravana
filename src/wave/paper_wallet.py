@@ -53,6 +53,7 @@ class PaperWallet:
     stop_at: float = STOP_AT_USD
     trades: int = 0
     fees_paid: float = 0.0
+    realized_pnl: float = 0.0   # iter-11: cumulative realized PnL (net of fees) for /wave footer
     peak_balance: float = START_BALANCE_USD
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -64,6 +65,7 @@ class PaperWallet:
             self.balance = float(d.get("balance", self.balance))
             self.trades = int(d.get("trades", 0))
             self.fees_paid = float(d.get("fees_paid", 0.0))
+            self.realized_pnl = float(d.get("realized_pnl", 0.0))
             self.peak_balance = float(d.get("peak_balance", self.balance))
             log.info(
                 "paper wallet loaded: balance=%.4f trades=%d fees=%.4f",
@@ -84,6 +86,7 @@ class PaperWallet:
                     "balance": self.balance,
                     "trades": self.trades,
                     "fees_paid": self.fees_paid,
+                    "realized_pnl": self.realized_pnl,
                     "peak_balance": self.peak_balance,
                 }, f)
         except Exception as e:
@@ -136,6 +139,7 @@ class PaperWallet:
         """Apply realized PnL (already fee-adjusted by caller) to balance."""
         with self._lock:
             self.balance += pnl_usd
+            self.realized_pnl += pnl_usd
             self.peak_balance = max(self.peak_balance, self.balance)
             self._save()
         log.info("PAPER pnl %+.4f balance=%.4f", pnl_usd, self.balance)
@@ -164,6 +168,7 @@ class PaperWallet:
             bal = self.balance
             peak = self.peak_balance
             fees = self.fees_paid
+            real = self.realized_pnl
             tr = self.trades
         return {
             "balance": round(bal, 4),
@@ -171,6 +176,7 @@ class PaperWallet:
             "unrealized": round(unreal, 4),
             "free": round(bal - used, 4),
             "fees_paid": round(fees, 4),
+            "realized": round(real, 4),
             "trades": tr,
             "peak": round(peak, 4),
             "max_target": self.max_target,

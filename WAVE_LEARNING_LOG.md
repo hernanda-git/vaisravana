@@ -378,6 +378,32 @@ distribution for evidence.
      is lower priority, but revisit later (TP 2xATR unreachable in 600s).
   3. Resume autonomous loop cron after iter-11 lands on a clean baseline.
 
+---
+
+## ITER-11 — notification footer: Realized PnL line
+- User request (from session context): the wave open card earlier showed
+  "Entry: 0.0 | SL: 0.0" and lacked a balance/used/unrealized/realized footer.
+  INVESTIGATION: the "Entry: 0.0" format was the PRE-iter-5 old bot_paper.py
+  positions card. Current notify_wave_open (iter-5+) already shows correct
+  Entry/SL/TP from wave.entry_price. The REAL remaining gap: /wave card had
+  Balance/Used/Free/Unrealized/Peak but NO Realized PnL line.
+- Change: paper_wallet.py — add realized_pnl accumulator (init 0, persisted
+  in JSON, incremented in credit_pnl by net PnL). snapshot() returns "realized".
+  engine.py build_wave_card head adds "  Realized  : {m['realized']:+.4f}$".
+- Test: run16, fresh $10, ~11 min window.
+- Evidence: /wave card renders Realized line live; wallet JSON carries
+  realized_pnl=0.0108 after closes. Bonus: run16 closed with tp05_hit:1
+  (first partial-TP bank in the loop) + 3 reversal exits — engine now exits
+  on signal, not just max_age. win 25%, avg_final_r +0.037, avg_peak_r 0.33,
+  fees $0.034 (truthful), 0 deep losers. Account +0.01 realized.
+- Verdict: KEEP. Closes the user-visible notification gap cleanly.
+
+## Loop state (end of iter-11)
+- Engine is on a clean, working baseline: fee-bleed fixed (iter-9), startup
+  warmup (iter-10), full notification footer (iter-11). Account survives and
+  grows on a green tape; fees are truthful 1:1 with opens.
+- Resuming autonomous loop cron f825078a3a03 after iter-11 commit.
+
 ## Loop state (end of iter-9)
 - Baseline for iter-10: run14/14b = $9.93 @21min, fees_paid $0.044 (truthful),
   13 opens, 17 closes (all max_age), avg_final_r -0.016, win>0 41%.
