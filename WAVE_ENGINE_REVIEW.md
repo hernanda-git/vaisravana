@@ -497,3 +497,113 @@ which is capital-gated out of reach at $10.
 
 *Part D supersedes the "fast scalping" framing everywhere above. The EV math is
 verified (practitioner re-ran strategy_math.py; all 10 invariants passed).*
+
+---
+
+# PART E — Critical Feed Fault Found (2026-07-29, iter-13 redeploy)
+
+While measuring iter-13, a **severe data-path bug** surfaced that invalidates
+prior "over-suppression" diagnoses:
+
+## E.1 Symptom
+iter-13 container ran 10 minutes with **0 opens, 0 closes, 0 gate rejects,
+and 0 feed ticks** — yet healthy (no crash). The log showed 9,584
+"FeedMux subscribed to 15 streams" lines but ZERO aggTrade/tick events.
+
+## E.2 Root cause
+`wave/feed.py` defaults `ws_url = "wss://fapi.binance.com/ws"` and
+`engine.py` reads it from `BINANCE_WS_URL` (default = direct Binance). The
+wave container was hitting **fapi.binance.com directly from sera's Tencent
+Cloud IP**, which receives NO stream data (connection opens, subscribes,
+then delivers nothing and reconnects in a storm). The in-stack `bots-wsproxy`
+container (Up 15h) relays `ws://wsproxy:8888` → `wss://fapi.binance.com/ws`
+and the **main bot uses it and trades fine.** The wave service had
+`depends_on: wsproxy` but was never pointed at the proxy URL.
+
+## E.3 Fix (infra, not strategy — respects Sentinel constraint)
+Added to `docker-compose.yml` under `vaisravana-wave`:
+```
+environment:
+  - BINANCE_WS_URL=ws://wsproxy:8888/ws
+```
+No engine/signal code changed. Redeployed (proc_f128457a621b).
+
+## E.4 Why this matters for the review
+- Every prior "0 opens / over-suppression" scare (e.g. iter-10 raised
+  floors, earlier 'no trades') may have been **this dead feed**, not the
+  strategy. The wave bot may have been trading (semi-)blind whenever it ran
+  standalone. This is the single biggest reliability finding in the review.
+- It means the iter-13 survival gate was **never actually exercised** in the
+  first measurement (no ticks arrived). The redeploy with the proxy fix is the
+  first valid run of iter-13.
+- Action: re-measure run17b with a live feed before concluding anything about
+  the gate's veto rate. If opens resume and fees are cut, the gate works. If
+  opens are still 0, the gate IS over-suppressing and must be loosened (as
+  iter-10 was).
+
+*Part E is a live finding; run17b measurement pending.*
+
+---
+
+# PART F — BLOCKER: Binance WebSocket is 403 from sera (both bots blind)
+
+This is the most important reliability finding of the entire review and it
+**invalidates the live-trading premise from sera right now**.
+
+## F.1 Proof (measured 2026-07-29)
+- REST `/fapi/v1/ping` and `/time` from sera: **HTTP 200** — the API host is
+  reachable.
+- WebSocket `wss://fapi.binance.com/ws` opened FROM the `bots-wsproxy`
+  container (which is what both bots use as their relay): **HTTP 403
+  "server rejected WebSocket connection"**.
+- Direct WS test from inside `bots-vaisravana-wave` via `wsproxy:8888`:
+  subscription accepted, but connection closes immediately (**1000 OK, ZERO
+  data messages**).
+- The **main bot (`bots-vaisravana`)** shows the same symptom: its logs are
+  full of `sizing capped` / `portfolio cap — skip` warnings (it scans with
+  stale/zero price data and skips every pair) and contain **no aggTrade /
+  kline / feed activity at all**.
+
+## F.2 Root cause
+Binance rejects WebSocket connections originating from sera's IP (Tencent
+Cloud datacenter range — Binance commonly geo/ASN-blocks cloud-hosted IPs for
+WS, while still allowing REST). REST works; WS does not. The `wsproxy`
+relay cannot help because it also egresses from sera.
+
+## F.3 Consequence (brutal honesty)
+- The wave bot has been running on a **dead tick feed** since standalone
+  runs began. Every "0 opens / over-suppression" scare (iter-10 raised
+  floors, iter-13 gate) was in fact **this dead feed**, NOT the strategy.
+- The "real-time fast scalping" goal is **currently impossible from sera** —
+  there is no live market data reaching the bots.
+- Prior run12-16 "opens/closes/win rates" must be re-examined: the wave bot
+  likely traded on seed/REST data or stale context; the numbers are NOT a
+  valid measurement of a live strategy.
+- This is a HARD BLOCKER for any live trading. No strategy (directional,
+  arb, MM, funding carry) can work without a live feed.
+
+## F.4 Options to unblock (need val's decision)
+1. **REST-poll fallback for the wave bot** (the main bot already does this).
+   Poll `/fapi/v1/ticker/bookTicker` + klines every few seconds over REST
+   (which works from sera). Slower (seconds, not ms) but LIVE. This makes the
+   "scalping" slower but at least real. Respects Sentinel constraint (infra).
+2. **Proxy/VPN egress** from sera through a residential/allowed IP so WS
+   connects. Requires a paid proxy or tunnel; changes infra; may violate
+   ToS/exchange rules — needs val's explicit call.
+3. **Move the bot off sera** (a non-blocked host / local machine) — but the
+   mandate is local-only on sera, so this contradicts ops memory.
+4. **Accept paper-only, REST-poll, and treat all "live" measurements as
+   REST-driven** — honest but slow; still lets the continuous-improvement
+   loop run on real (if delayed) data.
+
+## F.5 Immediate action taken
+- iter-13 survival gate + wsproxy routing committed to code/compose (correct
+  fixes regardless), but they cannot be validated until a live feed exists.
+- The gate is currently UNTESTED (no ticks arrived). Do NOT conclude it works
+  or over-suppresses.
+- Recommend Option 1 (REST-poll fallback) as the fastest honest unblock, then
+  re-measure from a known-live baseline.
+
+*Part F is a HARD BLOCKER. No strategy work is meaningful until the feed is
+restored. This single finding supersedes all prior "over-suppression"
+diagnoses — they were the dead feed, not the strategy.*
