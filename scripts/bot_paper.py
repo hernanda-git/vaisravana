@@ -178,14 +178,29 @@ MIN_NOTIONAL_USD = float(os.getenv("VAISRAVANA_MIN_NOTIONAL_USD", "5.0"))
 FEE_R_MAX_FRAC = float(os.getenv("VAISRAVANA_FEE_R_MAX_FRAC", "0.25"))
 # TP must be at least this % move from entry (expected move >= 3x round-trip cost)
 MIN_TP_MOVE_PCT = float(os.getenv("VAISRAVANA_MIN_TP_MOVE_PCT", "0.24"))
-MAX_ENTRIES_PER_HOUR = int(os.getenv("VAISRAVANA_MAX_ENTRIES_PER_HOUR", "4"))
-PAIR_ENTRY_SPACING_S = int(os.getenv("VAISRAVANA_PAIR_ENTRY_SPACING_S", "1800"))
+MAX_ENTRIES_PER_HOUR = int(os.getenv("VAISRAVANA_MAX_ENTRIES_PER_HOUR", "10"))
+PAIR_ENTRY_SPACING_S = int(os.getenv("VAISRAVANA_PAIR_ENTRY_SPACING_S", "900"))
 SESSION_BLOCK_UTC = {int(h) for h in
                      os.getenv("VAISRAVANA_SESSION_BLOCK_UTC", "0,1,2,3,4,5").split(",")
                      if h.strip().isdigit()}
 LOSS_STREAK_N = int(os.getenv("VAISRAVANA_LOSS_STREAK_N", "3"))
 LOSS_STREAK_COOLDOWN_S = int(os.getenv("VAISRAVANA_LOSS_STREAK_COOLDOWN_S", "1800"))
 BIG_CANDLE_ATR_MULT = float(os.getenv("VAISRAVANA_BIG_CANDLE_ATR_MULT", "3.0"))
+# v0.0.35 (red-team wave-1): ADX hard gate demoted 25 -> 15. 1m ADX is lag+noise;
+# at 25 it blocked ~50 signals/h and fought the top-chase guard (ADX demands
+# established trend, top-chase demands pullback — intersection near-empty).
+# Trend quality already lives in the weighted score; the hard gate only rejects
+# outright chop now.
+ADX_MIN = float(os.getenv("VAISRAVANA_ADX_MIN", "15.0"))
+# v0.0.35: BE-trail arms at +1.0R (was +0.5R). Run-1 evidence: the profit engine
+# was MAXHOLD grinds (+$8.03); arming BE at +0.5R would scratch exactly the
+# oscillating paths that mature into those winners.
+BE_TRAIL_ARM_R = float(os.getenv("VAISRAVANA_BE_TRAIL_ARM_R", "1.0"))
+# v0.0.35: signal-flip exit (idea validated in ajidwip/ai-trading-sequence-5m
+# "AI_REVERSE"): when the engine's decision flips to a full opposite-side ENTRY
+# signal while a position is open, exit at market instead of riding to SL.
+# Cuts the avg loser (-1R -> approx -0.3..-0.5R) without capping winners.
+SIGNAL_FLIP_EXIT = os.getenv("VAISRAVANA_SIGNAL_FLIP_EXIT", "1") == "1"
 
 # shared risk-layer state (single-threaded decision loop → plain dict is safe)
 RISK_STATE: dict = {"hour": -1, "entries_hour": 0, "pair_last_entry": {},
@@ -229,17 +244,21 @@ def _record_loss_streak(win: bool) -> None:
 
 
 def survival_gates(pair: str, entry: float, sl: float, tp: float, qty: float,
-                   equity: float, dec_bar, atr_pct: float) -> tuple[float, str]:
+                   equity: float, dec_bar, atr_pct: float,
+                   side: str = "") -> tuple[float, str]:
     """v0.0.34 pre-entry risk gates. Returns (qty_final, "") or (0.0, veto_reason).
 
     Order: cheap contextual vetoes first, then notional scaling vs LIVE equity,
     then fee-aware EV checks on the scaled size.
+    v0.0.35: session filter applies to BUY only — run-1 evidence says the SELL
+    edge (trending_bear) fires at all hours and the bot is frequency-starved;
+    blocking 21% of hours for the proven side was unmeasured throughput loss.
     """
     import datetime as _dt
     now = time.time()
     hour = _dt.datetime.now(_dt.timezone.utc).hour
-    if hour in SESSION_BLOCK_UTC:
-        return 0.0, f"session filter: {hour:02d}h UTC blocked"
+    if hour in SESSION_BLOCK_UTC and side != "SELL":
+        return 0.0, f"session filter: {hour:02d}h UTC blocked (BUY only)"
     if now < RISK_STATE["cooldown_until"]:
         return 0.0, f"loss-streak cooldown: {int(RISK_STATE['cooldown_until'] - now)}s left"
     if RISK_STATE["hour"] != hour:
@@ -349,6 +368,67 @@ def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
 
 
 # ── v0.0.19: ADX trend strength filter ──────────────────────────────────
+def compute_cvd_z(candles, lookback: int = 15) -> float | None:
+    """v0.0.35 (research wave-1): CVD / taker order-flow imbalance z-score.
+
+    Per-bar delta = 2*takerBuyVol - vol (>0 = net aggressive buying). Z-score
+    of the last bar's delta vs the trailing `lookback` bars. Strongest
+    academically-backed short-horizon signal available at ZERO extra REST cost
+    (klines field idx 9). Used as a directional veto:
+      - veto SELL when cvd_z > +CVD_VETO_Z (aggressive buyers in control)
+      - veto BUY  when cvd_z < -CVD_VETO_Z (aggressive sellers in control)
+    Returns None when taker-buy data is missing.
+    """
+    if not candles or len(candles) < lookback + 1:
+        return None
+    window = candles[-(lookback + 1):]
+    if all(getattr(b, "tb", 0.0) <= 0.0 for b in window):
+        return None
+    deltas = [2.0 * getattr(b, "tb", 0.0) - b.v for b in window]
+    hist, last = deltas[:-1], deltas[-1]
+    mean = sum(hist) / len(hist)
+    var = sum((d - mean) ** 2 for d in hist) / max(len(hist) - 1, 1)
+    sd = var ** 0.5
+    if sd <= 0:
+        return 0.0
+    return (last - mean) / sd
+
+
+CVD_VETO_Z = float(os.getenv("VAISRAVANA_CVD_VETO_Z", "1.0"))
+
+# v0.0.35: open-interest tracker {pair: (ts, oi)} for the flush detector.
+_OI_STATE: dict = {}
+
+
+def oi_flush_veto(pair: str, price_falling: bool, side: str) -> str:
+    """v0.0.35 (research wave-1): OI-delta x price direction gate.
+
+    price DOWN + OI DOWN = liquidation flush (longs forcibly closing); selling
+    INTO a flush fills at the flush bottom — run-1's likely SELL failure mode.
+    price UP + OI DOWN = short-squeeze pop; buying it = buying the top.
+    Fails open (returns "") on any fetch error — enhancement, never an
+    availability risk. One REST call (weight 1) per candidate entry only.
+    """
+    import urllib.request
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={pair}"
+        oi = float(json.loads(urllib.request.urlopen(url, timeout=6).read())["openInterest"])
+    except Exception:
+        return ""
+    prev = _OI_STATE.get(pair)
+    _OI_STATE[pair] = (time.time(), oi)
+    if prev is None or prev[1] <= 0:
+        return ""
+    oi_chg_pct = (oi - prev[1]) / prev[1] * 100.0
+    if side == "SELL" and price_falling and oi_chg_pct < -0.3:
+        return (f"OI flush veto: price down + OI {oi_chg_pct:+.2f}% "
+                f"(long-liquidation flush — don't sell the bottom)")
+    if side == "BUY" and not price_falling and oi_chg_pct < -0.3:
+        return (f"OI flush veto: price up + OI {oi_chg_pct:+.2f}% "
+                f"(short-squeeze pop — don't buy the top)")
+    return ""
+
+
 def compute_adx(candles: list, period: int = 14) -> float:
     """Average Directional Index 0-100. <20 = weak/choppy, 20-40 = trending, >40 = strong.
     Returns 0 on insufficient data (safe: won't block)."""
@@ -459,7 +539,8 @@ def fetch_klines(symbol: str, tf: str, limit: int) -> list[Candle]:
     # Binance. Falls back naturally when no proxy is configured.
     raw = json.loads(urllib.request.urlopen(url, timeout=15).read().decode())
     return [Candle(ts=r[0], o=float(r[1]), h=float(r[2]), l=float(r[3]),
-                   c=float(r[4]), v=float(r[5])) for r in raw]
+                   c=float(r[4]), v=float(r[5]),
+                   tb=float(r[9]) if len(r) > 9 else 0.0) for r in raw]
 
 
 def fetch_spread_bps(symbol: str) -> float | None:
@@ -1294,7 +1375,7 @@ def run() -> None:
                     _exc[0] = max(_exc[0], unrealized_r)
                     _exc[1] = min(_exc[1], unrealized_r)
                 old_sl = trade.sl_price
-                if trade.side == "BUY" and unrealized_r >= 0.5 and old_sl < trade.entry_price:
+                if trade.side == "BUY" and unrealized_r >= BE_TRAIL_ARM_R and old_sl < trade.entry_price:
                     new_sl = trade.entry_price * 0.9999  # very slight buffer
                     if monitor is not None:
                         for pos in monitor.positions.values():
@@ -1303,7 +1384,7 @@ def run() -> None:
                                 break
                     trade.sl_price = new_sl
                     log.debug("trailing SL %s %s moved to BE (R=%.2f)", sym, side_, unrealized_r)
-                elif trade.side == "SELL" and unrealized_r >= 0.5 and old_sl > trade.entry_price:
+                elif trade.side == "SELL" and unrealized_r >= BE_TRAIL_ARM_R and old_sl > trade.entry_price:
                     new_sl = trade.entry_price * 1.0001
                     if monitor is not None:
                         for pos in monitor.positions.values():
@@ -1494,7 +1575,7 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         adx_tf = max(contexts.keys(), key=_tf_minutes) if contexts else dtf
         adx_candles = cache.get(adx_tf) or dec
         adx_v = compute_adx(adx_candles, period=14)
-        adx_ok, adx_reason = adx_allowed(adx_v, threshold=25.0)
+        adx_ok, adx_reason = adx_allowed(adx_v, threshold=ADX_MIN)
 
         # ── state + context ───────────────────────────────────
         ema_fast, ema_slow = PROFILE_EMA.get(profile.name, (20, 50))
@@ -1543,6 +1624,17 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                        exchange=exchange)
             elif hit_sl:
                 _close(pair, dtf, t.side, t.sl_price, "SL", conn, lc, tel, kill,
+                       notifier, open_trades, loss_book=loss_book, excluder=excluder,
+                       exchange=exchange)
+            # v0.0.35: signal-flip exit — engine now signals a full ENTRY on the
+            # OPPOSITE side while we hold. Exit at market instead of riding to
+            # SL (run-1 losers averaged -1R by waiting for the stop). Pattern
+            # validated in ajidwip/ai-trading-sequence-5m ("AI_REVERSE" exits).
+            elif (SIGNAL_FLIP_EXIT and se.decision == "ENTRY"
+                  and se.side != t.side):
+                log.info("signal-flip exit %s %s: engine flipped to %s ENTRY "
+                         "(score %.2f)", pair, t.side, se.side, se.chosen_score)
+                _close(pair, dtf, t.side, bar.c, "FLIP", conn, lc, tel, kill,
                        notifier, open_trades, loss_book=loss_book, excluder=excluder,
                        exchange=exchange)
             continue  # this strategy already has a position; move to the next profile
@@ -1714,7 +1806,8 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         # then notional rescale vs LIVE equity, then fee-aware EV checks. ──
         qty, veto = survival_gates(pair, entry, sl, tp, qty, equity,
                                    dec[i] if dec else None,
-                                   pair_atr.get(pair, 0.0))
+                                   pair_atr.get(pair, 0.0),
+                                   side=se.side)
         if veto:
             # v0.0.34b: dedup — log + persist each (pair, veto-class) at most
             # once per hour instead of every tick (was ~100 rows/10min of
@@ -1729,6 +1822,28 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
             log.info("spread gate %s: %.2f bps > 5 — skip", pair, _spread)
             _persist_decisions_log(conn, pair, dtf, state, se, "GATED",
                                    reason=f"spread {_spread:.2f}bps > 5")
+            continue
+        # ── v0.0.35 research wave-1: order-flow vetoes on serious candidates ──
+        # CVD z-score (free, from klines taker-buy volume): don't sell into
+        # aggressive buying, don't buy into aggressive selling.
+        _cvd_z = compute_cvd_z(dec, lookback=15)
+        if _cvd_z is not None and (
+                (se.side == "SELL" and _cvd_z > CVD_VETO_Z) or
+                (se.side == "BUY" and _cvd_z < -CVD_VETO_Z)):
+            if _veto_should_note(pair, f"cvd veto {se.side}"):
+                log.info("cvd veto %s %s: cvd_z %+.2f", pair, se.side, _cvd_z)
+                _persist_decisions_log(conn, pair, dtf, state, se, "GATED",
+                                       reason=f"cvd veto: z {_cvd_z:+.2f} against {se.side}")
+            continue
+        # OI-delta flush detector (1 REST call, weight 1, only on candidates):
+        # don't sell a long-liquidation flush bottom / buy a squeeze top.
+        _price_falling = len(dec) >= 4 and dec[i].c < dec[i - 3].c
+        _oi_veto = oi_flush_veto(pair, _price_falling, se.side)
+        if _oi_veto:
+            if _veto_should_note(pair, "OI flush veto"):
+                log.info("%s: %s", pair, _oi_veto)
+                _persist_decisions_log(conn, pair, dtf, state, se, "GATED",
+                                       reason=_oi_veto)
             continue
         trade = lc.open(correlation_id=corr_id, pair=pair, tf=dtf,
                         side=se.side, entry_price=entry, size=qty,

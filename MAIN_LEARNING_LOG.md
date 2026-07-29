@@ -82,3 +82,71 @@ Watch items for the next verdict:
   sweep fades, anti-consensus rules, compounding math to $20/$50/$100.
 
 Synthesis + ranked implementation -> this file, then wave-1 implementation.
+
+## Iter 3 results — brainstorm synthesis (2026-07-29 ~05:45 UTC)
+
+Full reports: /root/.hermes/cache/delegation/subagent-summary-{0,1,2}-*.txt,
+/root/scalp_entry_signals_report.md, /root/scalping_bot_research.md.
+
+**Red-team's core verdict (accepted):** v0.0.34 fixed the blowup but strangled
+frequency to ~0 with multiplicative hard-AND gates; growth = edge x frequency,
+and anything x 0 = 0. The only proven bucket (trending_bear SELL, +$6.92 at
+56% WR, ~4.5 trades/h in run 1) was being rate-capped (4/h), session-blocked
+(00-05 UTC), ADX-gated (threshold 25 fought the top-chase guard: ADX demands
+established trend, top-chase demands pullback, intersection near-empty), and
+its profit engine (MAXHOLD grinds) was about to be scratched by the +0.5R
+BE-trail. Break-even WR under the run-1 exit structure was ~78% — unwinnable.
+
+**Alpha researcher's top evidence-backed signals (top 2 adopted):**
+1. CVD / taker order-flow imbalance — klines idx 9, zero extra REST calls,
+   strongest academic backing (SSRN 6938742, Frontiers 2026 OFI).
+2. OI-delta x price direction — flush detector; selling into a
+   long-liquidation flush = filling at the flush bottom (run-1 SELL failure
+   mode). /fapi/v1/openInterest, weight 1, candidates only.
+(Deferred: VWAP bands, BTC lead-lag z, funding extremes, forceOrder stream.)
+
+**Contrarian's math (adopted as risk policy):** $10 -> $100 realistically
+needs 1,000-2,000 trades at 53-56% WR, 1-2% risk/trade; expect 7-10 loss
+streaks; fee-in-R is the dominant term (already gated). 5% risk = ~30%
+chance of halving before doubling — stay small. Meta-rules (sweep-reversal,
+EMA-cross fade, round-number TP trimming) deferred to a later wave.
+
+**External repo studied (user request): ajidwip/ai-trading-sequence-5m
+("66% WR").** Honest read: claim NOT verifiable from the repo — its DB holds
+3 trades (two closed at breakeven via AI_REVERSE, pnl 0.0); SL/TP are set at
+20x ATR (barely ever hit -> WR inflated by design); EMA/RSI filters are all
+commented out; min confidence 0.45 on 3 classes is near-random. BUT two ideas
+are genuinely good and stolen: (1) signal-flip exit (AI_REVERSE): exit when
+the engine flips to an opposite full signal instead of riding to SL; (2)
+first-touch labeling for TP calibration (use later with mfe_r data).
+
+## Iter 4 — v0.0.35 growth wave-1 (deployed 2026-07-29 05:58 UTC)
+
+Changes (all additive/parametric, engine untouched, all env-tunable):
+1. **Un-strangle frequency:** hourly cap 4 -> 10; pair spacing 30 -> 15min;
+   ADX hard gate 25 -> 15 (demoted to chop-rejector; trend quality already
+   in the weighted score); session filter now blocks BUY ONLY — the proven
+   SELL side trades all 24h.
+2. **Protect the profit engine:** BE-trail arm moved +0.5R -> +1.0R
+   (red-team: +0.5R would scratch the oscillating paths that become MAXHOLD
+   winners; TP/MAXHOLD retune from real mfe_r data comes next iter).
+3. **Signal-flip exit** (close_reason=FLIP): opposite-side full ENTRY signal
+   while holding -> exit at market. Cuts avg loser without capping winners.
+4. **CVD veto** (compute_cvd_z, klines idx 9, free): don't SELL into
+   aggressive buying (z > +1), don't BUY into aggressive selling (z < -1).
+5. **OI flush veto** (oi_flush_veto): price down + OI down > 0.3% = long
+   liquidation flush -> don't sell the bottom; price up + OI down = squeeze
+   pop -> don't buy the top. Fails open on fetch errors.
+
+Verification (container tests): CVD z fires correctly on varied history
+(z +9.8 vetoes SELL, z -8.3 vetoes BUY), fails open (None) without taker
+data; live SOL cvd_z 0.1 sane; OI flush veto triggers on simulated 1% OI
+drop and fails open unprimed; session gate exempts SELL, still blocks BUY;
+constants live: ADX_MIN 15, BE arm 1.0R, cap 10/h, spacing 900s, FLIP on.
+
+Success criteria for the KEEP verdict (measure after >=24h / >=30 trades):
+- frequency 10-30 trades/day (was 0/day post-v0.0.34, 250/day run 1)
+- net expectancy > 0 after fees; balance above $10
+- FLIP exits show smaller avg loss than SL exits
+- mfe_r/mae_r populated -> feeds TP retune in iter 5
+

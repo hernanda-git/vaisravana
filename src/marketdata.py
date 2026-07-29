@@ -19,6 +19,7 @@ class Candle:
     l: float
     c: float
     v: float
+    tb: float = 0.0  # v0.0.35: taker-buy base volume (klines idx 9) — feeds CVD
 
 
 @dataclass
