@@ -1704,13 +1704,21 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         # real risk-based sizing (doc 30 §3): 0.25% equity at the SL distance
         info = (registry or SymbolRegistry()).get(pair)
         sl_distance = abs(entry - sl)
-        qty = 1.0
-        if info is not None and sl_distance > 0 and entry > 0:
-            qty = size_position(equity=equity,
-                                risk_per_trade_pct=surface.risk_per_trade_pct,
-                                entry=entry, sl_price=sl, leverage=lev_used,
-                                info=info, max_position_notional_pct=surface.max_position_notional_pct)
-            qty = qty if qty > 0 else 1.0
+        if info is None or sl_distance <= 0 or entry <= 0:
+            log.info("sizing skip %s: no symbol info or degenerate SL", pair)
+            continue
+        qty = size_position(equity=equity,
+                            risk_per_trade_pct=surface.risk_per_trade_pct,
+                            entry=entry, sl_price=sl, leverage=lev_used,
+                            info=info, max_position_notional_pct=surface.max_position_notional_pct)
+        if qty <= 0:
+            # size_position returning 0 means the pair CANNOT satisfy
+            # minNotional within the margin cap on this equity. The old
+            # fallback (qty=1.0) opened $64k BTC notional on a $10 account
+            # and one SL hit cost -$13.36 (>100% of equity). SKIP instead.
+            log.info("sizing skip %s: cannot satisfy minNotional within "
+                     "margin cap at equity %.2f — trade skipped", pair, equity)
+            continue
         # guard: if the chosen leverage would risk > MAX_SL_RISK_PCT of equity on a
         # 1-SL hit, do not size up beyond that (defense-in-depth for F5).
         _notional = qty * entry * lev_used
