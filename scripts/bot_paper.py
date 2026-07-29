@@ -949,70 +949,15 @@ def run() -> None:
     log.info("Vessavaṇa PAPER bot up: %d pairs · decide=%s · ctx=%s · v%s · %d open positions reloaded "
              "(LLM=%s)", len(PAIRS), DECISION_TF, ",".join(TFS), ver, len(open_trades), LLM_MODE)
 
-    # v0.1.0: Wave Engine routing (doc 50 §11)
+    # v0.1.1: Wave Engine moved to its own repo (hernanda-git/vaisravana-wave).
+    # This repo is the MAIN bot only; VAISRAVANA_ENGINE=wave is no longer valid here.
     engine = os.getenv("VAISRAVANA_ENGINE", "legacy").lower()
     if engine == "wave":
-        from wave.engine import run_wave_engine
-        import asyncio
-        log.info("Routing to Wave Engine (VAISRAVANA_ENGINE=wave)")
-
-        # Start minimal Telegram command listener for /wave /surf /status
-        _cmd_listen = os.getenv("VAISRAVANA_CMD_LISTEN", "1") not in ("0", "false", "no")
-        _bot_username = os.getenv("VAISRAVANA_BOT_USERNAME", "vaisravana_bot")
-        _wave_listener = None
-        if _cmd_listen:
-            from telegram_bot import TelegramCommandListener
-            def _wave_router(text: str, _raw: str) -> None:
-                cmd = text.split()[0].split("@")[0].lower()
-                if cmd == "/wave":
-                    try:
-                        from wave.engine import wave_state, build_wave_card
-                        notifier.send_message(build_wave_card(wave_state.get("waves", [])))
-                    except Exception as e:
-                        notifier.send_message(f"Wave error: {e}")
-                elif cmd == "/surf":
-                    try:
-                        from wave.engine import wave_state, build_surf_card
-                        notifier.send_message(build_surf_card(wave_state.get("closed_today", [])))
-                    except Exception as e:
-                        notifier.send_message(f"Surf error: {e}")
-                elif cmd == "/status":
-                    from wave.engine import wave_state
-                    ws = wave_state.get("waves", [])
-                    notifier.send_message(
-                        f"Wave Engine — 15 pairs\n"
-                        f"Open waves: {len(ws)}\n"
-                        f"Last heartbeat: polling..."
-                    )
-                elif cmd == "/stop":
-                    import wave.engine as E
-                    E.stop_requested = True
-                    try:
-                        notifier.send_message(
-                            "🛑 **Wave Engine stop requested**\n"
-                            "Engine akan berhenti di tick berikutnya (clean)."
-                        )
-                    except Exception:
-                        pass
-            _wave_listener = TelegramCommandListener(
-                notifier, _wave_router,
-                poll_s=2, allowed_chat_id=os.getenv("NOTIFY_CHAT_ID") or None,
-                bot_username=_bot_username,
-            )
-            _wave_listener.start()
-            log.info("Wave Engine Telegram listener started (/wave /surf /status)")
-
-        try:
-            asyncio.run(run_wave_engine(conn, surface, notifier, guard, exchange, kill))
-        except KeyboardInterrupt:
-            log.info("Wave Engine stopped by user")
-        except Exception as e:
-            log.exception("Wave Engine fatal error: %s", e)
-            try:
-                notifier.send_message(f"🔥 **Wave Engine crash**: {e}")
-            except Exception:
-                pass
-        return
+        raise SystemExit(
+            "VAISRAVANA_ENGINE=wave is not supported in this repo anymore. "
+            "The wave engine lives in hernanda-git/vaisravana-wave (deployed as "
+            "the bots-vaisravana-wave container). Unset VAISRAVANA_ENGINE or use 'legacy'."
+        )
     # Phase 13: clean startup card (Bahasa Indonesia, brand Vessavaṇa)
     notifier.notify_startup(ver, PAIRS, DECISION_TF, TFS, CYCLE_S, LLM_MODE, len(open_trades))
     # announce the deployed version + what changed on every (re)start
@@ -1161,16 +1106,11 @@ def run() -> None:
             except ValueError:
                 n = 25
             _send_decisions(n)
-        elif cmd == "/wave":
-            from wave.engine import wave_state, build_wave_card, get_wallet
-            wallet = get_wallet()
-            card = build_wave_card(wave_state.get("waves", []), wallet)
-            notifier.send_message(card)
-        elif cmd == "/surf":
-            from wave.engine import wave_state, build_surf_card, get_wallet
-            wallet = get_wallet()
-            card = build_surf_card(wave_state.get("closed_today", []), wallet)
-            notifier.send_message(card)
+        elif cmd in ("/wave", "/surf"):
+            # wave engine moved to hernanda-git/vaisravana-wave (@wave_vaisravana_bot)
+            notifier.send_message(
+                "Wave engine sekarang bot terpisah: gunakan @wave_vaisravana_bot."
+            )
         # unknown commands are ignored
 
     def _send_decisions(limit: int = 25) -> None:
