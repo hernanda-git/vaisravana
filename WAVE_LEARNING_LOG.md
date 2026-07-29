@@ -341,6 +341,43 @@ distribution for evidence.
   now takes FEWER, cleaner waves (no tick-stacking) and the tape is quiet.
   Still 0 tp_hit anywhere — TP (2xATR) is unreachable in 600s. Next lever.
 
+---
+
+## ITER-10 — startup warmup (no opens until ctx seeded)
+- Hypothesis (from iter-9 telemetry): run14 waves peaked at avg_peak_r 0.038
+  and mean-reverted to ~0 R; the bot force-opens a burst of ~8 dead waves in
+  the first 90s on whatever conf clears the low floor, before EMAs/trend have
+  meaning. A startup warmup (seed ctx for 90s, no opens) removes that dead
+  burst without touching signal math. First attempt ALSO raised gate floors
+  (conf 0.12->0.20, structure 0.12->0.20, ADX 18->22) but that OVER-
+  SUPPRESSED: 0 opens for a full 13-min run (flat tape never clears 0.20).
+  Reverted the floor raise; kept ONLY the warmup.
+- Change: engine.py — record engine_start_ts; in on_tick, skip opens while
+  time.time()-engine_start_ts < WARMUP_S (90, env-overridable). gate.py floors
+  kept at iter-9 values (0.12/0.12/18). Pure selectivity; no risk increase.
+- Test: run15b + run15c, fresh $10, ~27 min combined window.
+- Evidence: warmup confirmed (0 opens first 90s, then 7 clean opens, trades
+  match opens 1:1). opens/min 0.52 (was 0.87). win_rate 88.9%, avg_final_r
+  +0.20, avg_peak_r +0.26, net_pnl +$0.16, fees $0.02 (truthful), 0 deep
+  losers, worst R -0.08. Balance $10.00 -> ~$10.15. BEST risk-adjusted result
+  of the loop. (Caveat: this window's tape was green, avg_peak_r jumped to
+  0.26 vs 0.03 in run14 — part is market, not just code. But no regression,
+  cleaner pacing, account GREW. Warmup is correct regardless.)
+- Verdict: KEEP. Removes dead-burst churn at startup; strictly better pacing,
+  no risk increase, account grew. Floor-raise variant REJECTED (over-suppress).
+
+## Loop state (end of iter-10)
+- Baseline for iter-11: run15b/15c = $10.15 @27min, fees $0.02 (truthful),
+  ~16 opens, 16 closes (all max_age), win>0 88.9%, avg_final_r +0.20.
+- Standing questions (updated):
+  1. NOTIFICATION FOOTER (your note, iter-11 in progress): Entry/SL/TP on open
+     already correct in current notify_wave_open (your 0.0 screenshot was the
+     PRE-iter-5 old code, since superseded). Remaining gap: /wave card lacks a
+     Realized PnL line. Add realized_pnl accumulator to wallet + show it.
+  2. Still 0 tp_hit. With account now growing on max_age closes, TP reachability
+     is lower priority, but revisit later (TP 2xATR unreachable in 600s).
+  3. Resume autonomous loop cron after iter-11 lands on a clean baseline.
+
 ## Loop state (end of iter-9)
 - Baseline for iter-10: run14/14b = $9.93 @21min, fees_paid $0.044 (truthful),
   13 opens, 17 closes (all max_age), avg_final_r -0.016, win>0 41%.

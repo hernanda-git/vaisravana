@@ -122,6 +122,7 @@ async def run_wave_engine(conn, surface, notifier, guard, exchange, kill):
     excluder = PairExcluder()
     last_tick_time = time.time()
     _diag_n = 0  # diagnostic tick counter
+    engine_start_ts = time.time()  # iter-10: warmup clock (no opens until seeded)
 
     # ── Paper wallet (fake $10 balance + fees + survival sizing) ──
     from wave.paper_wallet import get_wallet
@@ -150,22 +151,31 @@ async def run_wave_engine(conn, surface, notifier, guard, exchange, kill):
         if excluder.is_excluded(pair):
             return
 
-        if not manager.in_cooldown(pair, "BUY"):
-            cand = scan(pair, "BUY", "1m", bias, confidence, ctx, zone_cache, adx=20)
-            if cand:
-                wave = manager.open(cand, bias, confidence, ctx, surface, wallet)
-                if wave:
-                    # open_fee already charged inside open(); report it
-                    open_fee = (wave.notional * wallet.fee_rate) if wallet else 0.0
-                    await notify_wave_open(notifier, wave, wallet, open_fee)
+        # iter-10: startup warmup. Seed EMAs/context for WARMUP_S before
+        # allowing any open. Without this the engine fires a burst of 8
+        # dead waves in the first 90s on whatever conf clears the (low)
+        # floor, before trend/structure have meaning. Opens resume after.
+        WARMUP_S = float(os.getenv("VAISRAVANA_WARMUP_S", "90"))
+        if time.time() - engine_start_ts < WARMUP_S:
+            log.debug("warmup: skipping opens for %.0fs (seeding ctx)",
+                      WARMUP_S - (time.time() - engine_start_ts))
+            # still let existing waves (none yet) and exits process below
+        else:
+            if not manager.in_cooldown(pair, "BUY"):
+                cand = scan(pair, "BUY", "1m", bias, confidence, ctx, zone_cache, adx=20)
+                if cand:
+                    wave = manager.open(cand, bias, confidence, ctx, surface, wallet)
+                    if wave:
+                        open_fee = (wave.notional * wallet.fee_rate) if wallet else 0.0
+                        await notify_wave_open(notifier, wave, wallet, open_fee)
 
-        if not manager.in_cooldown(pair, "SELL"):
-            cand = scan(pair, "SELL", "1m", bias, confidence, ctx, zone_cache, adx=20)
-            if cand:
-                wave = manager.open(cand, bias, confidence, ctx, surface, wallet)
-                if wave:
-                    open_fee = (wave.notional * wallet.fee_rate) if wallet else 0.0
-                    await notify_wave_open(notifier, wave, wallet, open_fee)
+            if not manager.in_cooldown(pair, "SELL"):
+                cand = scan(pair, "SELL", "1m", bias, confidence, ctx, zone_cache, adx=20)
+                if cand:
+                    wave = manager.open(cand, bias, confidence, ctx, surface, wallet)
+                    if wave:
+                        open_fee = (wave.notional * wallet.fee_rate) if wallet else 0.0
+                        await notify_wave_open(notifier, wave, wallet, open_fee)
 
         for wave in list(manager.waves.values()):
             if wave.pair != pair:
@@ -444,6 +454,7 @@ def build_wave_card(waves: list, wallet=None) -> str:
             f"<code>  Used (margin): {m['used']:.4f}$</code>",
             f"<code>  Free       : {m['free']:.4f}$</code>",
             f"<code>  Unrealized: {m['unrealized']:+.4f}$</code>",
+            f"<code>  Realized  : {m['realized']:+.4f}$</code>",
             f"<code>  Peak       : {m['peak']:.4f}$  (target {m['max_target']:.0f}$)</code>",
         ]
     else:

@@ -11,9 +11,12 @@ log = logging.getLogger(__name__)
 
 # Thresholds
 MIN_BIAS_STRENGTH = 0.30 # lowered so weak-trend tape still trades (surf even if choppy)
-CONF_ENTRY_FLOOR = 0.12  # lowered so bias+structure alone clears the gate in REST-poll mode
-ADX_FLOOR = 18
-STRUCTURE_SCORE_FLOOR = 0.12
+CONF_ENTRY_FLOOR = 0.12  # revert iter-10 raise: 0.20 was too strict on flat tape
+                          # (0 opens in a full run after warmup). Keep iter-9
+                          # selectivity (net break-even); the standalone warmup
+                          # already removed the dead 90s burst.
+ADX_FLOOR = 18           # revert iter-10 raise (22 too strict)
+STRUCTURE_SCORE_FLOOR = 0.12  # revert iter-10 raise (0.20 too strict)
 
 
 def wave_quality_pass(
