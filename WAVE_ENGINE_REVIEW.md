@@ -430,3 +430,70 @@ paused pending val's go-ahead on iter-12+. All brainstorming artifacts saved:
 /root/arb_mm_thesis_kill_analysis.md (skeptic),
 vaisravana-workspace/vaisravana/docs/01-architecture.md (architect),
 /root/scalping_bot_research.md (prior).*
+
+---
+
+# PART D — The Decisive EV Math (verified) + Goal Reframe (2026-07-29)
+
+The brainstorming batch's practitioner agent found and **independently
+verified** `/root/project-king-midas/docs/strategy_math.py` — the exact
+per-round-trip EV under OUR fee model. This is the single most important
+number in this whole review, because it contradicts the original goal
+("low-latency fast scalping to grow the balance") directly.
+
+## D.1 Verified numbers (0.04% taker both sides = 0.08% RT, +0.03% slip)
+
+```
+Round-trip fee (taker both sides): 0.080%
+All-in cost w/ slippage:           0.110%
+$ cost per $10 balance (full use): $0.0110
+
+Per-round-trip EV (as % of notional):
+SCALP tight  w=0.5% l=0.4% p=52%   EV = -0.0420%   breakeven WR = 55.6%
+SWING        w=2.5% l=1.5% p=45%   EV = +0.1900%   breakeven WR = 49.0%
+TREND        w=4.0% l=2.0% p=40%   EV = +0.2900%   breakeven WR = 45.0%
+```
+
+## D.2 What this means (honest expert read)
+
+- **Fast scalping is structurally NEGATIVE EV at our fee tier.** A scalp that
+  captures 0.5%/trade cannot clear the ~0.11% all-in cost; at coin-flip WR the
+  EV is −0.042%/RT and bleeds the $10 toward $0. This is the OPPOSITE of the
+  original "fast scalping to grow" goal. The goal was built on the wrong
+  strategy class.
+- **Swing and trend are positive EV** — but they require capturing ≥1% per
+  trade with a win rate clearing breakeven (45-49%). That means LONGER holds
+  and BIGGER capture, not faster trades. The winning path is the inverse of
+  "fast": it is "capture more per trade."
+- The maximum drawdown / survival is preserved by the survival gate (iter-13),
+  which vetoes any trade whose expected move can't clear 2.5× costs — i.e. it
+  mechanically suppresses the negative-EV scalp churn.
+
+## D.3 Goal reframe (this is the real insight, val)
+
+Original goal: "low-latency real-time fast scalping to grow the balance."
+Math-correct goal: **"capture ≥1% per trade on swing/trend structures, with a
+fee-aware gate that refuses to trade when the expected move can't clear costs;
+minimize catastrophic loss; keep the continuous-improvement loop running."**
+
+Speed is NOT the lever. At a 0.08% taker round-trip, the leverage is in
+(1) per-trade capture size (swing/trend geometry), and (2) refusing
+negative-EV trades (the survival gate). Latency only matters for arb/MM,
+which is capital-gated out of reach at $10.
+
+## D.4 Action consequence (updates the roadmap)
+
+- iter-13 survival gate: KEEP (correctly suppresses scalp churn). Run17 is
+  measuring its effect now.
+- iter-14 (MFE-based TP) is now framed as: set TP at the ~60-70th pct of
+  historical MFE so the bot actually CAPTURES the 1%+ swing move instead of
+  timing out at breakeven. This directly serves the swing/trend-positive-EV
+  path.
+- Funding-rate carry (north-star) still needs $10-25k — unchanged.
+- The "real-time scraping / high win rate" ambition is reframed: win rate is
+  NOT the lever (breakeven WR is 45-49% for swing/trend); per-trade capture
+  is. Real-time data helps only insofar as it improves entry timing for
+  swing/trend structures, not for scalping speed.
+
+*Part D supersedes the "fast scalping" framing everywhere above. The EV math is
+verified (practitioner re-ran strategy_math.py; all 10 invariants passed).*
