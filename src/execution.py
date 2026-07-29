@@ -92,10 +92,15 @@ def size_position(
         if qty * entry > equity * 10:   # sanity: never runaway
             return 0.0
 
-    # margin cap: notional ≤ max_position_notional_pct of free margin (doc 30 §3)
+    # margin cap: margin used (= notional / leverage) ≤ max_position_notional_pct
+    # of free margin (doc 30 §3). NOTE: leverage DIVIDES here — a 3x position
+    # holds notional/3 as margin. The old code multiplied (qty*entry*leverage),
+    # which on a $10 account capped effective notional at $1.67 < minNotional $5,
+    # making EVERY pair unsizeable (and triggering the qty=1.0 fallback blowup).
     margin_base = free_margin if free_margin is not None else equity
-    max_notional = margin_base * (max_position_notional_pct / 100.0)
-    while qty > 0 and qty * entry * leverage > max_notional:
+    max_margin = margin_base * (max_position_notional_pct / 100.0)
+    lev = max(leverage, 1)
+    while qty > 0 and (qty * entry) / lev > max_margin:
         qty -= step
     qty = max(qty, 0.0)
     if qty * entry < info.min_notional:
