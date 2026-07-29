@@ -288,6 +288,47 @@ distribution for evidence.
 
 ---
 
+## ITER-8 — hard loss-cut exit (live_r <= -0.5R -> close)
+- Hypothesis (standing Q1 of iter-7): two run12 losers bled to -0.57/-0.60R
+  and rode to max_age near the full 1.0R SL. A hard loss-cut at -0.5R caps
+  per-wave tail risk at half the SL. Pure loss protection: only fires when
+  live_r <= -0.5, so it can NEVER close a winner; cannot raise freq or fees.
+- Change: manager.py — `LOSS_CUT_R = 0.5`; evaluate_exit rule 0c
+  `if wave.live_r <= -LOSS_CUT_R: return CLOSE(reason="loss_cut")`.
+  No signal/gate/cooldown change.
+- Test: run13, fresh $10, ~21 min window, build --no-cache + force-recreate.
+- Evidence: 27 opens / 18 closes. Close reasons: max_age 15, loss_cut 2,
+  anchor_hit 1, tp_hit 0, reversal 0. The loss_cut FIRED (2x) capping tail
+  risk; worst R = -0.52 (run12 worst was -0.60). avg_final_r -0.15 vs
+  run12 -0.12 (tape-driven, not worse). Balance $8.94, fees $0.04 (DB) but
+  wallet self-report fees_paid=$0.79 over 360 trade-ticks (SEE ITER-9 BUG).
+- Verdict: KEEP. Strictly non-harmful loss protection; arms for the
+  "loser ramps below -0.5R and sits" case the 600s max_age only partly
+  covers. Effect on risk-adjusted outcome is small (max_age already exits
+  most deep losers near -0.5R), but it is a correct, free safety net.
+- IMPORTANT DISCOVERY during iter-8 validation: the wallet counted 360
+  fee-events from only 27 opens. Root cause = fee charged before the
+  MAX_OPEN_WAVES cap AND no guard vs re-opening an already-live
+  (pair, side) every tick -> duplicate waves each bleed a phantom open fee.
+  This is the DOMINANT loss (8% of $10 in 21 min), far bigger than exits.
+  Tracked as iter-9 (the real lever), not iter-8.
+
+## Loop state (end of iter-8)
+- Baseline for iter-9: run13 = $8.94 @21min, fee-reality $0.79/360-ticks,
+  27 opens, 2 loss_cut, 0 tp_hit, avg_final_r -0.15.
+- Standing questions (updated):
+  1. FEE BLEED BUG (P0): fix open() so fee is charged ONLY on a real new
+     wave — (a) guard against an already-live (pair, side), (b) charge fee
+     AFTER the MAX_OPEN_WAVES cap passes. This alone should cut fee drag
+     ~10x (360 -> ~36 events) and likely flip net PnL positive pre-fee.
+  2. Still 0 tp_hit across 12 metric runs. avg_peak_r ~0.10 means 2xATR TP
+     is unreachable in 600s. Lower TP to ~0.5xATR or extend max_age.
+  3. Notification footer: Entry/SL/TP show 0.0 and balance/used/
+     unrealized/realized missing (build_wave_card exists but not wired to
+     /wave). Fix after fee bug.
+
+---
+
 ## ITER-8 — hard loss-cut exit (live_r <= -0.5 => close, reason=loss_cut)
 - Hypothesis (standing Q1 of iter-7): run12 had two losers bleed to -0.57/-0.60R
   and sit at max_age because reversal 0b never armed (peak < 0.2R). A hard
