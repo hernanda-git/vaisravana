@@ -152,6 +152,12 @@ CYCLE_S = int(os.getenv("VAISRAVANA_CYCLE_S", "60"))  # 60s = one decision per m
 _DATA_DIR = os.getenv("VAISRAVANA_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data"))
 DB_PATH = os.getenv("VAISRAVANA_DB", os.path.join(_DATA_DIR, "vaisravana.db"))
 SURFACE_PATH = os.getenv("VAISRAVANA_SURFACE", os.path.join(_DATA_DIR, "surface.json"))
+# v0.0.37: persistent owner /stop flag. The old in-memory control["stop"]=True
+# vanished on any container restart (docker restart: unless-stopped), so the
+# bot silently resumed trading after an owner /stop. This file is checked at
+# boot and honoured across restarts. Mirrors the wave/alpha bots' mechanism.
+STOP_FLAG_PATH = os.getenv("VAISRAVANA_STOP_FLAG",
+                           os.path.join(_DATA_DIR, "vaisravana_stop.flag"))
 # v0.0.16: caretaker cron state file (deploy cooldown + excluded pairs). `/clean` removes
 # it so the caretaker may re-tune immediately after a fresh start.
 CRON_STATE_PATH = Path(__file__).resolve().parent.parent / ".vaisravana_cron_state.json"
@@ -870,6 +876,23 @@ def _persist_decisions_log(conn, pair, tf, state, se, decision, reason=None):
 def run() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # v0.0.37: honour a persistent owner /stop flag across container restarts.
+    # docker restart: unless-stopped brings the process back after a crash, so
+    # an in-memory control["stop"] is lost; this file survives restarts.
+    if os.path.exists(STOP_FLAG_PATH):
+        log.warning("vaisravana_stop.flag present at boot -- refusing to trade. "
+                    "Send /clean or delete the flag to resume.")
+        try:
+            _halt_n = TelegramNotifier(
+                bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+                chat_id=os.getenv("NOTIFY_CHAT_ID", ""),
+            )
+            _halt_n.send_message(
+                "<b>Vessavaṇa halted</b> (owner /stop flag present at boot).\n"
+                "Bot will not trade until the flag is cleared. Send /clean to resume.")
+        except Exception as e:
+            log.debug("stop-flag boot notice failed: %s", e)
+        return
     conn = init_db(DB_PATH)
     # v0.0.10: on boot, immediately trim decisions_log older than 1 day so a long-lived
     # or restarted bot never lets the spammy audit table grow unbounded.
@@ -1062,6 +1085,12 @@ def run() -> None:
             CRON_STATE_PATH.unlink(missing_ok=True)
         except OSError:
             pass
+        # v0.0.37: /clean also clears the persistent owner /stop flag so the
+        # bot resumes trading immediately after a fresh start.
+        try:
+            os.remove(STOP_FLAG_PATH)
+        except OSError:
+            pass
         try:
             stats = db_stats(conn, DB_PATH)
             notifier.send_message(
@@ -1080,10 +1109,17 @@ def run() -> None:
 
     def stop_bot() -> None:
         control["stop"] = True
+        # v0.0.37: persist the stop so a container restart (docker
+        # restart: unless-stopped) does not silently resume trading.
         try:
-            notifier.send_message("🛑 <b>Vessavaṇa dihentikan</b> (owner /stop).\n"
-                                   "Loop akan berhenti di akhir siklus ini. Kirim /clean atau "
-                                   "restart machine untuk memulai lagi.")
+            with open(STOP_FLAG_PATH, "w") as _fh:
+                _fh.write("stopped by owner /stop at %s\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+        except OSError as exc:
+            log.warning("could not persist stop flag: %s", exc)
+        try:
+            notifier.send_message("<b>Vessavaṇa dihentikan</b> (owner /stop).\n"
+                                   "Loop akan berhenti di akhir siklus ini. Flag "
+                                   "<code>vaisravana_stop.flag</code> aktif. Kirim /clean untuk melanjutkan.")
 
         except Exception as e:
             log.debug("stop card failed: %s", e)
