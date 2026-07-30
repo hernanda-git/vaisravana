@@ -1402,13 +1402,13 @@ def _shadow_replay(conn: sqlite3.Connection, surface: config.ParameterSurface
         evals.append(rep)
         # FP: closed at SL (loss) -> what score/context did it have?
         sl_rows = conn.execute(
-            "SELECT scores, regime FROM trade_logs "
+            "SELECT scores_json, regime FROM trade_logs "
             "WHERE pair=? AND tf=? AND side=? AND win=0 AND close_reason='SL'",
             (pair, tf, side),
         ).fetchall()
         for r in sl_rows[:10]:
             try:
-                sc = json.loads(r["scores"]) if r["scores"] else {}
+                sc = json.loads(r["scores_json"]) if r["scores_json"] else {}
             except Exception:
                 sc = {}
             fp_fn.append({
