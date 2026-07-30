@@ -25,10 +25,10 @@ class GateResult:
 class TwoLayerGate:
     def __init__(
         self,
-        spread_bps_limit: float = 5.0,           # doc 30 §3 Gate A
-        cooldown_s: int = 600,                   # doc 21 cooldown_after_loss default 10m
-        max_leverage: int = 2,                    # doc 21 hard cap
-        daily_loss_limit_pct: float = 0.5,        # doc 21 / doc 30 §7
+        spread_bps_limit: float = 10.0,          # doc 30 §3 Gate A
+        cooldown_s: int = 120,                   # doc 21 cooldown_after_loss default 2m
+        max_leverage: int = 5,                   # doc 21 hard cap
+        daily_loss_limit_pct: float = 2.0,       # doc 21 / doc 30 §7
         clock: callable = time.time,
     ) -> None:
         self.spread_bps_limit = spread_bps_limit

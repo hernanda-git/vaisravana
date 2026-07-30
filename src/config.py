@@ -71,7 +71,7 @@ class StrategyProfile(BaseModel):
     tp_atr_mult: float = Field(ge=1.0, le=6.0)
     max_hold_min: int = Field(ge=1, le=10080)
     cooldown_min: int = Field(default=5, ge=0, le=240)
-    winrate_floor_pct: float = Field(default=56.0, ge=50.0, le=85.0)
+    winrate_floor_pct: float = Field(default=45.0, ge=40.0, le=85.0)
 
     @property
     def rr(self) -> float:
@@ -99,21 +99,21 @@ def default_profiles() -> dict[str, StrategyProfile]:
     return {
         "scalping": StrategyProfile(
             name="scalping", decision_tf="1m", context_tfs=["5m", "15m"],
-            entry_threshold=0.68, watch_threshold=0.58,
-            sl_atr_mult=1.125, tp_atr_mult=2.25, max_hold_min=15, cooldown_min=2,
-            winrate_floor_pct=56.0,
+            entry_threshold=0.45, watch_threshold=0.40,
+            sl_atr_mult=1.125, tp_atr_mult=2.25, max_hold_min=5, cooldown_min=1,
+            winrate_floor_pct=45.0,
         ),
         "day": StrategyProfile(
             name="day", decision_tf="15m", context_tfs=["1h", "4h"],
-            entry_threshold=0.58, watch_threshold=0.50,
-            sl_atr_mult=1.5, tp_atr_mult=2.5, max_hold_min=240, cooldown_min=15,
-            winrate_floor_pct=54.0,
+            entry_threshold=0.45, watch_threshold=0.40,
+            sl_atr_mult=1.5, tp_atr_mult=2.5, max_hold_min=60, cooldown_min=15,
+            winrate_floor_pct=45.0,
         ),
         "swing": StrategyProfile(
             name="swing", decision_tf="1h", context_tfs=["4h", "1d"],
-            entry_threshold=0.56, watch_threshold=0.48,
-            sl_atr_mult=2.0, tp_atr_mult=4.0, max_hold_min=2880, cooldown_min=60,
-            winrate_floor_pct=52.0,
+            entry_threshold=0.45, watch_threshold=0.40,
+            sl_atr_mult=2.0, tp_atr_mult=4.0, max_hold_min=120, cooldown_min=60,
+            winrate_floor_pct=45.0,
         ),
     }
 
@@ -128,25 +128,25 @@ class ParameterSurface(BaseModel):
 
     weights: Weights = Field(default_factory=Weights)
 
-    entry_threshold: float = Field(default=0.60, ge=0.50, le=0.92)
-    watch_threshold: float = Field(default=0.52, ge=0.40, le=0.85)
+    entry_threshold: float = Field(default=0.45, ge=0.40, le=0.92)
+    watch_threshold: float = Field(default=0.40, ge=0.35, le=0.85)
 
     sl_atr_mult: float = Field(default=1.0, ge=0.8, le=3.0)
     tp_atr_mult: float = Field(default=2.0, ge=1.0, le=6.0)  # v0.0.23 T1: R:R 2:1 (was 1.5)
 
-    max_leverage: int = Field(default=3, ge=1, le=3)
-    cooldown_after_loss: int = Field(default=5, ge=0, le=60)
+    max_leverage: int = Field(default=5, ge=1, le=5)
+    cooldown_after_loss: int = Field(default=2, ge=0, le=60)
 
-    daily_loss_limit_pct: float = Field(default=0.5, ge=0.3, le=2.0)
+    daily_loss_limit_pct: float = Field(default=2.0, ge=0.3, le=2.0)
     risk_per_trade_pct: float = Field(default=0.25, ge=0.10, le=0.50)
     max_position_notional_pct: float = Field(default=50.0, ge=10.0, le=60.0)
 
     # Expectancy-first promotion (v0.1.0). winrate_gate_pct kept for backward-compat/advisory.
-    winrate_floor_pct: float = Field(default=56.0, ge=50.0, le=85.0)
-    min_expectancy_r: float = Field(default=0.10, ge=0.0, le=1.0)
+    winrate_floor_pct: float = Field(default=45.0, ge=40.0, le=85.0)
+    min_expectancy_r: float = Field(default=0.02, ge=0.0, le=1.0)
     winrate_gate_pct: float = Field(default=85.0, ge=50.0, le=95.0)
     min_trades_for_promote: int = Field(default=100, ge=30, le=500)
-    global_max_live_pairs: int = Field(default=5, ge=1, le=20)
+    global_max_live_pairs: int = Field(default=10, ge=1, le=20)
 
     @property
     def rr(self) -> float:

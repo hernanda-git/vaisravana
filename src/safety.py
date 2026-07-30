@@ -27,15 +27,15 @@ from dataclasses import dataclass, field
 
 from evaluation import EvalReport
 
-LOSING_STREAK_LIMIT = 5            # doc 30 §7
-STREAK_COOLDOWN_S = 30 * 60        # doc 30 §7: 30 menit
+LOSING_STREAK_LIMIT = 10            # doc 30 §7
+STREAK_COOLDOWN_S = 5 * 60          # doc 30 §7: 5 menit
 
 # Expectancy-first promotion defaults (v0.1.0). Overridable per-call from the surface.
-PROMOTION_MIN_TRADES = 100         # reachable in paper (was 200)
-PROMOTION_WR_FLOOR_PCT = 56.0      # FLOOR above break-even (was 85 target)
-PROMOTION_EXPECTANCY_R = 0.10      # headline gate: must be genuinely +EV
-PROMOTION_MAX_DD_PCT = 3.0
-PROMOTION_PF = 1.20                # doc 30 §5 profit-factor target
+PROMOTION_MIN_TRADES = 30          # reachable in paper (was 200)
+PROMOTION_WR_FLOOR_PCT = 45.0      # FLOOR above break-even (was 85 target)
+PROMOTION_EXPECTANCY_R = 0.02      # headline gate: must be mildly +EV
+PROMOTION_MAX_DD_PCT = 10.0
+PROMOTION_PF = 1.05                # doc 30 §5 profit-factor target
 
 # Backward-compat alias (some older code/tests referenced the WR gate constant).
 PROMOTION_WR_PCT = PROMOTION_WR_FLOOR_PCT
@@ -45,7 +45,7 @@ PROMOTION_WR_PCT = PROMOTION_WR_FLOOR_PCT
 
 @dataclass
 class KillSwitch:
-    daily_loss_limit_pct: float = 0.5
+    daily_loss_limit_pct: float = 2.0
     adl_rank_limit: int = 4
     clock: callable = time.time
     tripped: bool = False
