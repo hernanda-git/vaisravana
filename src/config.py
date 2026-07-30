@@ -65,8 +65,8 @@ class StrategyProfile(BaseModel):
     name: str
     decision_tf: str                       # the bar we decide + act on
     context_tfs: list[str] = Field(default_factory=list)
-    entry_threshold: float = Field(ge=0.50, le=0.92)
-    watch_threshold: float = Field(ge=0.40, le=0.85)
+    entry_threshold: float = Field(ge=0.40, le=0.92)
+    watch_threshold: float = Field(ge=0.35, le=0.85)
     sl_atr_mult: float = Field(ge=0.8, le=3.0)
     tp_atr_mult: float = Field(ge=1.0, le=6.0)
     max_hold_min: int = Field(ge=1, le=10080)
