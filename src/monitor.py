@@ -194,11 +194,14 @@ class PositionMonitor:
                 self._market_close(pos, "ORPHAN", mark)
                 continue
 
-            # 4. time-based exit: hold > max-hold (one TF bar budget)
-            max_hold = MAX_HOLD_BY_TF.get(pos.tf, 15 * 60)
-            if age > max_hold:
-                self._market_close(pos, "MAXHOLD", mark)
-                continue
+            # 4. time-based exit (MAXHOLD) — DISABLED per owner request.
+            # Bot now rides the trend until TP/SL/conf_collapse/bank_08r fires.
+            # Only the orphan safety net (step 3, >30m with no protective orders)
+            # remains as a fallback so a position with vanished orders still closes.
+            # max_hold = MAX_HOLD_BY_TF.get(pos.tf, 15 * 60)
+            # if age > max_hold:
+            #     self._market_close(pos, "MAXHOLD", mark)
+            #     continue
 
         emitted = self.close_events[start_idx:]
         return emitted
