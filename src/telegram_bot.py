@@ -148,18 +148,31 @@ class TelegramNotifier:
         unreal = s.get("unrealized", 0.0)
         realized = s.get("realized", 0.0)
         open_n = s.get("open_n", 0)
+        # overall portfolio stats (win rate, totals, fees)
+        wr = s.get("win_rate", s.get("wr", 0.0))
+        total_trades = s.get("total_trades", s.get("n", 0))
+        total_wins = s.get("total_wins", s.get("wins", 0))
+        total_loses = s.get("total_loses", s.get("losses", 0))
+        total_fee = s.get("total_fee", s.get("fees_paid", 0.0))
+        # format entry/sl/tp: show — when 0 (pending or not yet filled)
+        def fmt(v: float) -> str:
+            return f"{v:.2f}" if v != 0.0 else "—"
         text = (
             f"{side_icon} <b>OPEN</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
             f"<code>{html_escape(side)}</code>\n"
-            f"entry: <code>{entry:.2f}</code>  sl: <code>{sl:.2f}</code>  "
-            f"tp: <code>{tp:.2f}</code>\n"
+            f"entry: <code>{fmt(entry)}</code>  sl: <code>{fmt(sl)}</code>  "
+            f"tp: <code>{fmt(tp)}</code>\n"
             f"size: <code>{size}</code>  lev: <code>{lev}x</code>  "
             f"conf: <code>{conf:.2f}</code>\n"
             f"fee: <code>{fee_usd:.4f}$</code>\n"
             f"\n<b>Balance</b>\n"
             f"equity: <code>${equity:.2f}</code>  used: <code>${margin:.2f}</code>\n"
             f"unrealized: <code>{unreal:+.2f}$</code>  realized: <code>{realized:+.2f}$</code>\n"
-            f"open positions: <code>{open_n}</code>"
+            f"open positions: <code>{open_n}</code>\n"
+            f"\n<b>Portfolio</b>\n"
+            f"win rate: <code>{wr:.1f}%</code>  trades: <code>{total_trades}</code> "
+            f"(W:{total_wins} L:{total_loses})\n"
+            f"fees paid: <code>{total_fee:.4f}$</code>"
         )
         return self.send_message(text)
 
@@ -174,6 +187,12 @@ class TelegramNotifier:
         unreal = s.get("unrealized", 0.0)
         realized = s.get("realized", 0.0)
         open_n = s.get("open_n", 0)
+        # overall portfolio stats
+        wr = s.get("win_rate", s.get("wr", 0.0))
+        total_trades = s.get("total_trades", s.get("n", 0))
+        total_wins = s.get("total_wins", s.get("wins", 0))
+        total_loses = s.get("total_loses", s.get("losses", 0))
+        total_fee = s.get("total_fee", s.get("fees_paid", 0.0))
         text = (
             f"{emoji} <b>CLOSE</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
             f"<code>{html_escape(side)}</code> ({html_escape(reason)})\n"
@@ -183,7 +202,11 @@ class TelegramNotifier:
             f"\n<b>Balance</b>\n"
             f"equity: <code>${equity:.2f}</code>  used: <code>${margin:.2f}</code>\n"
             f"unrealized: <code>{unreal:+.2f}$</code>  realized: <code>{realized:+.2f}$</code>\n"
-            f"open positions: <code>{open_n}</code>"
+            f"open positions: <code>{open_n}</code>\n"
+            f"\n<b>Portfolio</b>\n"
+            f"win rate: <code>{wr:.1f}%</code>  trades: <code>{total_trades}</code> "
+            f"(W:{total_wins} L:{total_loses})\n"
+            f"fees paid: <code>{total_fee:.4f}$</code>"
         )
         return self.send_message(text)
 
