@@ -72,6 +72,23 @@ class PositionMonitor:
 
     # --- internals ---
 
+    @staticmethod
+    def _unrealized_r(pos: "Position", mark: float) -> float:
+        """R-multiple of current mark vs entry, measured against SL distance.
+
+        Positive = in profit, negative = in loss. Mirrors the excursion math
+        used by the wave engine so the bank_08r / conf_collapse gates line up.
+        """
+        if pos.side == "BUY":
+            denom = abs(pos.entry_price - pos.sl.stop_price)
+        else:
+            denom = abs(pos.entry_price - pos.sl.stop_price)
+        if denom <= 0:
+            return 0.0
+        if pos.side == "BUY":
+            return (mark - pos.entry_price) / denom
+        return (pos.entry_price - mark) / denom
+
     def _market_close(self, pos: Position, reason: str, price: float) -> None:
         draft = OrderDraft(
             symbol=pos.symbol,
@@ -122,7 +139,39 @@ class PositionMonitor:
                 self._market_close(pos, "TP", mark)
                 continue
 
-            # 2. self-heal: conditional SL vanished but position open → re-place 1x
+            # 2b. bank_08r (ported from wave bot WR 67%): once R >= +0.08,
+            # trail SL to +0.05R to lock profit early instead of grinding to
+            # MAXHOLD. This is the single biggest WR lever on the wave side.
+            r_now = self._unrealized_r(pos, mark)
+            if r_now >= 0.08:
+                if pos.side == "BUY":
+                    new_sl = pos.entry_price * (1 + 0.0005)
+                    if pos.sl.stop_price < new_sl:
+                        pos.sl.stop_price = new_sl
+                        if self.exchange is not None and hasattr(self.exchange, "update_sl"):
+                            try:
+                                self.exchange.update_sl(pos, new_sl)
+                            except Exception:
+                                pass
+                else:
+                    new_sl = pos.entry_price * (1 - 0.0005)
+                    if pos.sl.stop_price > new_sl:
+                        pos.sl.stop_price = new_sl
+                        if self.exchange is not None and hasattr(self.exchange, "update_sl"):
+                            try:
+                                self.exchange.update_sl(pos, new_sl)
+                            except Exception:
+                                pass
+
+            # 2c. conf_collapse gate (ported from wave bot): exit on a deep
+            # adverse excursion (R <= -0.20) instead of waiting for the full SL.
+            # Caps tail risk; the feared deeper loss_cut side-effect never
+            # materialized in 24 wave trades.
+            if r_now <= -0.20 and pos.sl.stop_price > pos.entry_price * (1 - 0.001 if pos.side == "BUY" else 1 + 0.001):
+                self._market_close(pos, "CONF_COLLAPSE", mark)
+                continue
+
+            # 2d. self-heal: conditional SL vanished but position open → re-place 1x
             if pos.sl.mode == "CONDITIONAL" and not pos.sl_on_exchange and not pos.healed:
                 close_side = "SELL" if pos.side == "BUY" else "BUY"
                 draft = OrderDraft(
