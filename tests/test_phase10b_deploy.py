@@ -60,8 +60,19 @@ def test_notify_fill_and_close_shape():
     n.notify_fill("ETHUSDT", "15m", "BUY", 3000.0, 2980.0, 3040.0, 2.0)
     n.notify_close("ETHUSDT", "15m", "BUY", 3040.0, "TP", 2.0, True)
     assert len(n._client.calls) == 2
-    assert "PAPER FILL" in n._client.calls[0]["text"]
-    assert "✅" in n._client.calls[1]["text"]
+    fill_body = n._client.calls[0]["text"]
+    close_body = n._client.calls[1]["text"]
+    # fill card shape (redesigned: LONG/SHORT + box layout + Portfolio footer)
+    assert "LONG ETHUSDT" in fill_body and "BUY" not in fill_body.split("LONG")[0]
+    assert "entry:" in fill_body and "sl:" in fill_body and "tp:" in fill_body
+    assert "win rate:" in fill_body or "WR" in fill_body
+    assert "fees" in fill_body.lower()
+    # close card shape (WIN/LOSS, no emoji)
+    assert "WIN" in close_body and "CLOSE" not in close_body.split("WIN")[0]
+    assert "pnl:" in close_body and "net:" in close_body
+    # no emoji in either message
+    assert "✅" not in fill_body and "❌" not in fill_body
+    assert "✅" not in close_body and "❌" not in close_body
 
 
 def test_plain_text_fallback_on_parse_entities():

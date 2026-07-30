@@ -141,14 +141,13 @@ class TelegramNotifier:
                     sl: float, tp: float, lev: float, conf: float = 0.0,
                     fee_usd: float = 0.0, size: float = 0.0,
                     stats: dict | None = None) -> bool:
-        side_icon = "🟢" if side == "BUY" else "🔴"
+        direction = "LONG" if side == "BUY" else "SHORT"
         s = stats or {}
         equity = s.get("equity", s.get("balance", 0.0))
         margin = s.get("margin", 0.0)
         unreal = s.get("unrealized", 0.0)
         realized = s.get("realized", 0.0)
         open_n = s.get("open_n", 0)
-        # overall portfolio stats (win rate, totals, fees)
         wr = s.get("win_rate", s.get("wr", 0.0))
         total_trades = s.get("total_trades", s.get("n", 0))
         total_wins = s.get("total_wins", s.get("wins", 0))
@@ -158,21 +157,16 @@ class TelegramNotifier:
         def fmt(v: float) -> str:
             return f"{v:.2f}" if v != 0.0 else "—"
         text = (
-            f"{side_icon} <b>OPEN</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
-            f"<code>{html_escape(side)}</code>\n"
-            f"entry: <code>{fmt(entry)}</code>  sl: <code>{fmt(sl)}</code>  "
+            f"<b>{direction} {html_escape(pair)} {html_escape(tf)}</b>\n"
+            f"┌ entry: <code>{fmt(entry)}</code>  sl: <code>{fmt(sl)}</code>  "
             f"tp: <code>{fmt(tp)}</code>\n"
-            f"size: <code>{size}</code>  lev: <code>{lev}x</code>  "
-            f"conf: <code>{conf:.2f}</code>\n"
-            f"fee: <code>{fee_usd:.4f}$</code>\n"
-            f"\n<b>Balance</b>\n"
-            f"equity: <code>${equity:.2f}</code>  used: <code>${margin:.2f}</code>\n"
-            f"unrealized: <code>{unreal:+.2f}$</code>  realized: <code>{realized:+.2f}$</code>\n"
-            f"open positions: <code>{open_n}</code>\n"
-            f"\n<b>Portfolio</b>\n"
-            f"win rate: <code>{wr:.1f}%</code>  trades: <code>{total_trades}</code> "
-            f"(W:{total_wins} L:{total_loses})\n"
-            f"fees paid: <code>{total_fee:.4f}$</code>"
+            f"  size: <code>{size}</code>  lev: <code>{lev}x</code>  "
+            f"conf: <code>{conf:.2f}</code>  fee: <code>{fee_usd:.4f}$</code> ─\n"
+            f"└ Balance: equity <code>${equity:.2f}</code>  used <code>${margin:.2f}</code> "
+            f"open <code>{open_n}</code>\n"
+            f"  unrealized: <code>{unreal:+.2f}$</code>  realized: <code>{realized:+.2f}$</code>\n"
+            f"  Portfolio: WR <code>{wr:.1f}%</code>  trades <code>{total_trades}</code> "
+            f"(W:{total_wins} L:{total_loses})  fees <code>{total_fee:.4f}$</code>"
         )
         return self.send_message(text)
 
@@ -180,46 +174,41 @@ class TelegramNotifier:
                      reason: str, pnl_r: float, win: bool,
                      fee_usd: float = 0.0, net_usd: float = 0.0,
                      stats: dict | None = None) -> bool:
-        emoji = "✅" if win else "❌"
+        result = "WIN" if win else "LOSS"
         s = stats or {}
         equity = s.get("equity", s.get("balance", 0.0))
         margin = s.get("margin", 0.0)
         unreal = s.get("unrealized", 0.0)
         realized = s.get("realized", 0.0)
         open_n = s.get("open_n", 0)
-        # overall portfolio stats
         wr = s.get("win_rate", s.get("wr", 0.0))
         total_trades = s.get("total_trades", s.get("n", 0))
         total_wins = s.get("total_wins", s.get("wins", 0))
         total_loses = s.get("total_loses", s.get("losses", 0))
         total_fee = s.get("total_fee", s.get("fees_paid", 0.0))
         text = (
-            f"{emoji} <b>CLOSE</b> <code>{html_escape(pair)} {html_escape(tf)}</code> "
-            f"<code>{html_escape(side)}</code> ({html_escape(reason)})\n"
-            f"exit: <code>{exit_price:.2f}</code>  pnl: <code>{pnl_r:+.2f}R</code>  "
-            f"net: <code>{net_usd:+.4f}$</code>\n"
-            f"fee: <code>{fee_usd:.4f}$</code>\n"
-            f"\n<b>Balance</b>\n"
-            f"equity: <code>${equity:.2f}</code>  used: <code>${margin:.2f}</code>\n"
-            f"unrealized: <code>{unreal:+.2f}$</code>  realized: <code>{realized:+.2f}$</code>\n"
-            f"open positions: <code>{open_n}</code>\n"
-            f"\n<b>Portfolio</b>\n"
-            f"win rate: <code>{wr:.1f}%</code>  trades: <code>{total_trades}</code> "
-            f"(W:{total_wins} L:{total_loses})\n"
-            f"fees paid: <code>{total_fee:.4f}$</code>"
+            f"<b>{result} {html_escape(pair)} {html_escape(tf)}</b> "
+            f"({html_escape(reason)})\n"
+            f"┌ exit: <code>{exit_price:.2f}</code>  pnl: <code>{pnl_r:+.2f}R</code>  "
+            f"net: <code>{net_usd:+.4f}$</code>  fee: <code>{fee_usd:.4f}$</code> ─\n"
+            f"└ Balance: equity <code>${equity:.2f}</code>  used <code>${margin:.2f}</code> "
+            f"open <code>{open_n}</code>\n"
+            f"  unrealized: <code>{unreal:+.2f}$</code>  realized: <code>{realized:+.2f}$</code>\n"
+            f"  Portfolio: WR <code>{wr:.1f}%</code>  trades <code>{total_trades}</code> "
+            f"(W:{total_wins} L:{total_loses})  fees <code>{total_fee:.4f}$</code>"
         )
         return self.send_message(text)
 
     def notify_promotion(self, pair: str, tf: str, kind: str, review: str) -> bool:
         text = (
-            f"🚀 <b>SENTINEL {html_escape(kind)}</b> <code>{html_escape(pair)} {html_escape(tf)}</code>\n"
+            f"<b>PROMOTION {html_escape(kind)}</b> <code>{html_escape(pair)} {html_escape(tf)}</code>\n"
             f"<i>{html_escape(review)}</i>"
         )
         return self.send_message(text)
 
     def notify_kill_switch(self, reason: str) -> bool:
         text = (
-            f"🛑 <b>KILL-SWITCH TRIPPED</b>\n"
+            f"<b>KILL-SWITCH TRIPPED</b>\n"
             f"<i>{html_escape(reason)}</i>\n"
             f"paper loop halted - no further entries until cooldown clears."
         )
@@ -236,7 +225,7 @@ class TelegramNotifier:
         pair_s = " · ".join(pairs)
         ctx_s = " · ".join(ctx_tfs)
         text = (
-            f"🤖 <b>Vessavaṇa</b> · <b>Bot PAPER aktif</b> <code>v{html_escape(version)}</code>\n"
+            f"<b>Vessavaṇa</b> · <b>Bot PAPER aktif</b> <code>v{html_escape(version)}</code>\n"
             f"\n"
             f"<b>Pasangan</b>  : <code>{html_escape(pair_s)}</code>\n"
             f"<b>Keputusan</b> : <code>{html_escape(decide_tf)}</code> · eksekusi saat candle tutup\n"
@@ -251,14 +240,14 @@ class TelegramNotifier:
     def notify_health_check(self, version: str, region: str, open_n: int,
                             feed_ok: bool = True, notes: str = "") -> bool:
         """Heartbeat card with systems status (startup)."""
-        status = "✅ SEHAT" if feed_ok else "⚠️ FEED BERMASALAH"
+        status = "SEHAT" if feed_ok else "FEED BERMASALAH"
         text = (
             f"<b>Vessavaṇa</b> · <code>v{html_escape(version)}</code>\n"
             f"┌─ {'─'*30}\n"
             f"│ {status}\n"
-            f"│ 🌏 Region    │ <code>{html_escape(region)}</code>\n"
-            f"│ 📂 Positions │ <code>{open_n}</code> open\n"
-            f"│ 🕐 Uptime    │ <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>\n"
+            f"│ Region    │ <code>{html_escape(region)}</code>\n"
+            f"│ Positions │ <code>{open_n}</code> open\n"
+            f"│ Uptime    │ <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>\n"
             f"└─ {'─'*30}\n"
         )
         if notes:
