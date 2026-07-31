@@ -163,11 +163,24 @@ class PositionMonitor:
                             except Exception:
                                 pass
 
-            # 2c. conf_collapse gate (ported from wave bot): exit on a deep
-            # adverse excursion (R <= -0.20) instead of waiting for the full SL.
-            # Caps tail risk; the feared deeper loss_cut side-effect never
-            # materialized in 24 wave trades.
-            if r_now <= -0.20 and pos.sl.stop_price > pos.entry_price * (1 - 0.001 if pos.side == "BUY" else 1 + 0.001):
+            # 2c. conf_collapse gate (v2 redesign): exit on adverse excursion
+            # only when the excursion is large enough that fee-aware exit is
+            # still +EV. Thresholds:
+            #   - R <= -0.35 (was -0.20) — deeper excursion required before cutting
+            #   - SL must still be > 0.30% from entry (was 0.10%) — avoids
+            #     closing a position whose SL is already tighter than the fee floor
+            # Fee floor: 2 × (0.0002 open + 0.0004 close) = 0.0012 RT → -0.12R
+            #   needs the position to be at minimum -0.35R for the close to
+            #   recover the fees on the next trade.
+            _MIN_R_FOR_CONF_COLLAPSE = -0.35  # was -0.20 — fee-aware threshold
+            _MIN_SL_DIST_PCT = 0.0030  # 0.30% — was 0.0010 (0.10%)
+            _sl_dist_pct = (
+                abs(pos.entry_price - pos.sl.stop_price) / pos.entry_price
+            )
+            if (
+                r_now <= _MIN_R_FOR_CONF_COLLAPSE
+                and _sl_dist_pct > _MIN_SL_DIST_PCT
+            ):
                 self._market_close(pos, "CONF_COLLAPSE", mark)
                 continue
 
