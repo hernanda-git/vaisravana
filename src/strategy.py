@@ -88,7 +88,7 @@ def evaluate_strategy(
         watch_threshold=profile.watch_threshold,
     )
     side = dec.side or ("BUY" if dec.long_score >= dec.short_score else "SELL")
-    sl_price, tp_price = _sl_tp(side, entry_price, atr, profile, atr_pct=s.atr_pct)
+    sl_price, tp_price = _sl_tp(side, entry_price, atr, profile, atr_pct=state.atr_pct)
     return StrategyEntry(
         strategy=profile.name,
         decision_tf=profile.decision_tf,
