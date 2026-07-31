@@ -54,10 +54,16 @@ def active_strategies(
     return [p for name, p in profiles.items() if name not in disabled]
 
 
-def _sl_tp(side: str, entry_price: float, atr: float, profile: StrategyProfile) -> tuple[float, float]:
-    """Derive SL/TP from the profile's ATR multipliers (LONG below/above, SHORT mirrored)."""
+def _sl_tp(side: str, entry_price: float, atr: float, profile: StrategyProfile, atr_pct: float = 0.01) -> tuple[float, float]:
+    """Derive SL/TP from the profile's ATR multipliers (LONG below/above, SHORT mirrored).
+
+    ATR regime modifier (additive, env-tunable): in high-vol regimes (atr_pct > 0.02)
+    TP widens to capture larger moves; in tight range (atr_pct < 0.005) TP tightens
+    to avoid getting picked off by noise. All additive — no engine changes.
+    """
     sl_dist = profile.sl_atr_mult * atr
-    tp_dist = profile.tp_atr_mult * atr
+    regime_mult = 1.0 + max(0.0, (atr_pct - 0.01)) * 10.0  # wider TP when vol > 1%
+    tp_dist = profile.tp_atr_mult * atr * regime_mult
     if side == "BUY":
         return entry_price - sl_dist, entry_price + tp_dist
     return entry_price + sl_dist, entry_price - tp_dist
@@ -82,7 +88,7 @@ def evaluate_strategy(
         watch_threshold=profile.watch_threshold,
     )
     side = dec.side or ("BUY" if dec.long_score >= dec.short_score else "SELL")
-    sl_price, tp_price = _sl_tp(side, entry_price, atr, profile)
+    sl_price, tp_price = _sl_tp(side, entry_price, atr, profile, atr_pct=s.atr_pct)
     return StrategyEntry(
         strategy=profile.name,
         decision_tf=profile.decision_tf,

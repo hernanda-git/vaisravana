@@ -63,6 +63,7 @@ class MarketState:
     pullback_to_anchor: bool = False    # LTF retraced into HTF bias then resumed
     # market data health
     spread_bps: float = 3.0
+    cvd_z: float | None = None        # CVD z-score from taker-buy volume (order flow), added v0.0.35
     funding_ok: bool = True
     adl_rank: int = 1                # 1..5
     oi_z: float = 0.0

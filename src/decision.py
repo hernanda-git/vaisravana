@@ -106,6 +106,7 @@ class DecisionOrchestrator:
                     entry_price=entry_price,
                     leverage=leverage if leverage is not None else self.surface.max_leverage,
                     intraday_loss_pct=intraday_loss_pct,
+                    cvd_z=state.cvd_z if hasattr(state, 'cvd_z') else None,
                 )
             if not gate_result.passed:
                 final_decision = "SKIP"   # gate veto → recorded as SKIP with reasons

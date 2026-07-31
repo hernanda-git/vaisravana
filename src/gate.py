@@ -1,6 +1,6 @@
 """Project Vaiśravaṇa — Two-Layer Safety Gate + decision logging (doc 25 §2, doc 30 §3).
 
-Gate A — cheap, pre-scoring (no engine): idempotency, cooldown, liquidity whitelist, spread.
+Gate A — cheap, pre-scoring (no engine): idempotency, cooldown, liquidity whitelist, spread, CVD veto.
 Gate B — post-scoring, pre-execution HARD CLAMP the 9-engine score cannot override
 (doc 25): leverage ceiling, daily-loss cap, SL direction correct for the chosen side,
 reduceOnly on closes.
@@ -25,16 +25,19 @@ class GateResult:
 class TwoLayerGate:
     def __init__(
         self,
-        spread_bps_limit: float = 10.0,          # doc 30 §3 Gate A
+        spread_bps_limit: float | None = None,    # tightened from 10bps — paper can afford it (doc 30 §3 Gate A)
         cooldown_s: int = 120,                   # doc 21 cooldown_after_loss default 2m
         max_leverage: int = 5,                   # doc 21 hard cap
         daily_loss_limit_pct: float = 2.0,       # doc 21 / doc 30 §7
+        cvd_veto_z: float | None = None,              # additive CVD veto in Gate A — env-tunable via VAISRAVANA_CVD_VETO_Z (doc 30 §3)
         clock: callable = time.time,
     ) -> None:
-        self.spread_bps_limit = spread_bps_limit
+        import os as _os
+        self.spread_bps_limit = spread_bps_limit if spread_bps_limit is not None else 6.0
         self.cooldown_s = cooldown_s
         self.max_leverage = max_leverage
         self.daily_loss_limit_pct = daily_loss_limit_pct
+        self.cvd_veto_z = cvd_veto_z if cvd_veto_z is not None else float(_os.getenv("VAISRAVANA_CVD_VETO_Z", "1.0"))
         self._clock = clock
         self._last_entry: dict[str, float] = {}      # pair -> last entry ts (cooldown)
         self._seen_correlation: set[str] = set()     # idempotency (doc 32 L5)
@@ -47,6 +50,7 @@ class TwoLayerGate:
         spread_bps: float,
         liquidity_ok: bool,
         intraday_loss_pct: float = 0.0,     # current realized loss % today
+        cvd_z: float | None = None,          # CVD z-score (None = pass, additive veto)
     ) -> tuple[bool, list[str]]:
         reasons: list[str] = []
         if correlation_id in self._seen_correlation:
@@ -58,6 +62,16 @@ class TwoLayerGate:
         if spread_bps > self.spread_bps_limit:
             reasons.append(f"SPREAD: {spread_bps}bps > {self.spread_bps_limit}bps")
             return False, reasons
+        # CVD counter-trade veto (additive, env-tunable via cvd_veto_z):
+        #   no SELL when aggressive buyers dominate (z > +cvd_veto_z)
+        #   no BUY  when aggressive sellers dominate (z < -cvd_veto_z)
+        if cvd_z is not None and self.cvd_veto_z > 0.0:
+            if cvd_z > self.cvd_veto_z:
+                reasons.append(f"CVD_VETO_SELL: cvd_z {cvd_z:+.2f} > +{self.cvd_veto_z} (aggressive buyers)")
+                return False, reasons
+            if cvd_z < -self.cvd_veto_z:
+                reasons.append(f"CVD_VETO_BUY: cvd_z {cvd_z:+.2f} < -{self.cvd_veto_z} (aggressive sellers)")
+                return False, reasons
         if intraday_loss_pct >= self.daily_loss_limit_pct:
             reasons.append(f"DAILY_LOSS: {intraday_loss_pct}% >= {self.daily_loss_limit_pct}%")
             return False, reasons
@@ -101,9 +115,10 @@ class TwoLayerGate:
         entry_price: float,
         leverage: int,
         intraday_loss_pct: float = 0.0,
+        cvd_z: float | None = None,
     ) -> GateResult:
         a_ok, a_reasons = self.gate_a(
-            correlation_id, pair, spread_bps, liquidity_ok, intraday_loss_pct
+            correlation_id, pair, spread_bps, liquidity_ok, intraday_loss_pct, cvd_z
         )
         if not a_ok:
             return GateResult(False, False, False, a_reasons)

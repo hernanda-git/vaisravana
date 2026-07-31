@@ -400,7 +400,9 @@ def compute_cvd_z(candles, lookback: int = 15) -> float | None:
     return (last - mean) / sd
 
 
-CVD_VETO_Z = float(os.getenv("VAISRAVANA_CVD_VETO_Z", "1.0"))
+# v0.0.35: CVD z-score kept for state.cvd_z feed to Gate A (was used for inline veto before).
+# Actual veto now lives in gate.py TwoLayerGate.cvd_veto_z (env: VAISRAVANA_CVD_VETO_Z, default 1.0).
+_CVD_VETO_Z = float(os.getenv("VAISRAVANA_CVD_VETO_Z", "1.0"))
 
 # v0.0.35: open-interest tracker {pair: (ts, oi)} for the flush detector.
 _OI_STATE: dict = {}
@@ -1838,17 +1840,12 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                                    reason=f"spread {_spread:.2f}bps > 5")
             continue
         # ── v0.0.35 research wave-1: order-flow vetoes on serious candidates ──
-        # CVD z-score (free, from klines taker-buy volume): don't sell into
-        # aggressive buying, don't buy into aggressive selling.
+        # CVD z-score is now passed to state.cvd_z and handled by Gate A
+        # (additive, env-tunable via VAISRAVANA_CVD_VETO_Z). The inline veto
+        # was moved to gate.py to keep the gate layer consistent with the
+        # spread filter and liquidity check.
         _cvd_z = compute_cvd_z(dec, lookback=15)
-        if _cvd_z is not None and (
-                (se.side == "SELL" and _cvd_z > CVD_VETO_Z) or
-                (se.side == "BUY" and _cvd_z < -CVD_VETO_Z)):
-            if _veto_should_note(pair, f"cvd veto {se.side}"):
-                log.info("cvd veto %s %s: cvd_z %+.2f", pair, se.side, _cvd_z)
-                _persist_decisions_log(conn, pair, dtf, state, se, "GATED",
-                                       reason=f"cvd veto: z {_cvd_z:+.2f} against {se.side}")
-            continue
+        state.cvd_z = _cvd_z
         # OI-delta flush detector (1 REST call, weight 1, only on candidates):
         # don't sell a long-liquidation flush bottom / buy a squeeze top.
         _price_falling = len(dec) >= 4 and dec[i].c < dec[i - 3].c
