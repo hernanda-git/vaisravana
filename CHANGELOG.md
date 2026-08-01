@@ -353,3 +353,18 @@ Repo-only commit (NO auto-deploy — human-gated cutover per plan).
   addressed to it (e.g. `/status@vaisravana_bot`) and ignores the other bot's commands
   (e.g. `/health@xvalarion_bot`) arriving in the same chat. Plain commands still work.
 - Updated command registration (`setMyCommands`) and README.
+
+## v0.0.34 (2026-08-01)
+
+### Changed
+- Universe ranking now uses ALL Binance futures pairs instead of hardcoded 15 pairs
+- PAIRS initialization now uses dynamic approach - VAISRAVANA_PAIRS env var or universe ranker
+- Removed DEFAULT_UNIVERSE from PAIRS initialization
+- All bots now use universe ranking only for pair selection
+
+### Added
+- Universe ranker dynamic pair population at runtime
+- Fallback to VAISRAVANA_PAIRS env var if ranker not available
+
+### Fixed
+- Hardcoded 15-pair limitation removed
