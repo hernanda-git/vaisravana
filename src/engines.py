@@ -61,6 +61,11 @@ class MarketState:
     htf_bias2: str = "neutral"          # high TF (4h-1d) — explicit 3rd layer
     mtf_confluence: bool = False        # LTF/MF/HTF agree
     pullback_to_anchor: bool = False    # LTF retraced into HTF bias then resumed
+    # --- alpha signals (v0.0.36, P0-36) ---
+    z_score: float = 0.0                # price z-score vs rolling mean (mean reversion)
+    vwap_dev: float = 0.0               # VWAP deviation z-score (institutional benchmark)
+    funding_rate_value: float = 0.0     # actual funding rate (not boolean) — contrarian signal
+    oi_delta: float = 0.0               # OI change direction (momentum confirmation)
     # market data health
     spread_bps: float = 3.0
     cvd_z: float | None = None        # CVD z-score from taker-buy volume (order flow), added v0.0.35
@@ -164,6 +169,71 @@ def funding_oi_score(s: MarketState) -> float:
     if s.adl_rank >= 4:
         sc -= 0.3
     return _clamp(sc)
+
+
+def z_score_signal(s: MarketState) -> float:
+    """Z-score mean reversion signal (v0.0.36, P0-36).
+
+    When price deviates >2 std from rolling mean, bet on reversion.
+    Returns 0..1 where 1.0 = strong mean reversion signal.
+    """
+    z = abs(s.z_score)
+    if z < 1.0:
+        return 0.5  # neutral, no signal
+    if z < 2.0:
+        return 0.6  # mild signal
+    if z < 3.0:
+        return 0.75  # strong signal
+    return 0.9  # extreme signal — high conviction reversion
+
+
+def vwap_signal(s: MarketState) -> float:
+    """VWAP deviation signal (v0.0.36, P0-36).
+
+    Price far from VWAP = mean reversion opportunity.
+    Returns 0..1 where 1.0 = strong VWAP deviation signal.
+    """
+    v = abs(s.vwap_dev)
+    if v < 0.5:
+        return 0.5  # neutral
+    if v < 1.0:
+        return 0.6  # mild
+    if v < 2.0:
+        return 0.75  # strong
+    return 0.9  # extreme
+
+
+def funding_rate_signal(s: MarketState) -> float:
+    """Funding rate VALUE signal (v0.0.36, P0-36).
+
+    High positive funding = crowded long = contrarian SELL bias.
+    High negative funding = crowded short = contrarian BUY bias.
+    Returns 0..1 where 1.0 = strong contrarian signal.
+    """
+    f = abs(s.funding_rate_value)
+    if f < 0.0001:  # <0.01% per 8h
+        return 0.5  # neutral
+    if f < 0.0003:  # 0.01-0.03%
+        return 0.6  # mild
+    if f < 0.0005:  # 0.03-0.05%
+        return 0.75  # strong
+    return 0.9  # extreme (>0.05%) — high conviction
+
+
+def oi_context_signal(s: MarketState) -> float:
+    """OI context signal (v0.0.36, P0-36).
+
+    OI change direction confirms/rejects price momentum.
+    Returns 0..1 where 1.0 = strong OI confirmation.
+    """
+    o = abs(s.oi_delta)
+    if o < 0.01:
+        return 0.5  # neutral
+    if o < 0.05:
+        return 0.6  # mild
+    if o < 0.10:
+        return 0.75  # strong
+    return 0.9  # extreme
 
 
 def adaptive_weights(adx_val: float, regime: str, base: dict | None = None) -> dict:

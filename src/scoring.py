@@ -13,15 +13,17 @@ from engines import (
     MarketState,
     _FACTORS,
     atr_score,
-    crossasset_score,
     funding_oi_score,
     liquidity_score,
     liquidity_score_bear,
     momentum_score,
-    mtf_relational_score,
     regime_score,
     structure_score,
     volume_score,
+    z_score_signal,
+    vwap_signal,
+    funding_rate_signal,
+    oi_context_signal,
 )
 
 
@@ -155,12 +157,11 @@ def decide_ctx(
     entry_threshold: float | None = None,
     watch_threshold: float | None = None,
 ) -> Decision:
-    """Context-aware decision (v0.0.7): the 7-factor `decide` PLUS cross-asset + MTF
-    relational confirmation.
+    """Context-aware decision (v0.0.36, P0-36): the 7-factor `decide` PLUS alpha signal boosters.
 
-    The relational factors are applied as a MODULATOR on the base score (preserving the
-    doc-21 Σweights=1.0 invariant) and as a HARD gate when the trade fights the market's
-    rudder (BTC downtrend + risk-off long, etc.). The base 7-factor logic is unchanged,
+    The 4 alpha signals (z-score, VWAP, funding rate, OI context) are applied as a
+    MODULATOR on the base score. The context HARD GATE has been removed — we trust the
+    scoring to decide, not a hard block. The base 7-factor logic is unchanged,
     so all existing tests on `decide()` keep passing.
     """
     surface = surface or default_surface()
@@ -169,25 +170,47 @@ def decide_ctx(
     if base.decision != "ENTRY" or base.side is None:
         return base  # nothing to confirm/block
 
-    from marketcontext import MarketContext
-    ctx = MarketContext(
-        btc_bias=s.btc_bias, btc_ret=s.btc_ret,
-        dominance_delta=s.dominance_delta, risk_regime=s.risk_regime,
-        alt_rs_btc=s.alt_rs_btc, alt_breadth=s.alt_breadth,
-        ltf_bias=s.ltf_bias, mtf_bias=s.mtf_bias, htf_bias=s.htf_bias2,
-        mtf_confluence=s.mtf_confluence, pullback_to_anchor=s.pullback_to_anchor,
-    )
-    boost = ctx.ctx_boost()
-    allowed, reason = ctx.ctx_gate_open(base.side)
-    if not allowed:
-        # context hard-blocks the entry -> downgrade to WATCH with a note
-        return Decision(
-            long_score=base.long_score, short_score=base.short_score,
-            side=None, decision="WATCH",
-            chosen_score=round(base.chosen_score * 0.9, 4),
-            confidence_pct=round(base.chosen_score * 90.0, 2),
-            sub_scores=base.sub_scores,
-        )
+    # --- Alpha signal boosters (v0.0.36, P0-36) ---
+    # These are soft boosters, not hard gates. They modulate the base score.
+    boost = 1.0
+
+    # Z-score mean reversion: if extreme, boost the side that aligns with reversion
+    if s.z_score < -2.0 and base.side == "BUY":
+        boost += 0.05  # oversold + BUY = mean reversion long
+    elif s.z_score > 2.0 and base.side == "SELL":
+        boost += 0.05  # overbought + SELL = mean reversion short
+    elif s.z_score < -2.0 and base.side == "SELL":
+        boost -= 0.03  # oversold + SELL = fighting reversion
+    elif s.z_score > 2.0 and base.side == "BUY":
+        boost -= 0.03  # overbought + BUY = fighting reversion
+
+    # VWAP deviation: if price far from VWAP, boost mean reversion
+    if s.vwap_dev < -1.5 and base.side == "BUY":
+        boost += 0.04  # below VWAP + BUY = mean reversion
+    elif s.vwap_dev > 1.5 and base.side == "SELL":
+        boost += 0.04  # above VWAP + SELL = mean reversion
+    elif s.vwap_dev < -1.5 and base.side == "SELL":
+        boost -= 0.02  # below VWAP + SELL = fighting
+    elif s.vwap_dev > 1.5 and base.side == "BUY":
+        boost -= 0.02  # above VWAP + BUY = fighting
+
+    # Funding rate: contrarian signal
+    if s.funding_rate_value > 0.0005 and base.side == "SELL":
+        boost += 0.04  # crowded long + SELL = contrarian
+    elif s.funding_rate_value < -0.0005 and base.side == "BUY":
+        boost += 0.04  # crowded short + BUY = contrarian
+    elif s.funding_rate_value > 0.0005 and base.side == "BUY":
+        boost -= 0.02  # crowded long + BUY = following the herd
+    elif s.funding_rate_value < -0.0005 and base.side == "SELL":
+        boost -= 0.02  # crowded short + SELL = following the herd
+
+    # OI context: momentum confirmation
+    if abs(s.oi_delta) > 0.05:
+        boost += 0.02  # strong OI change = momentum confirmation
+
+    # Clamp boost to [0.85, 1.15] — soft modulation, not hard gate
+    boost = max(0.85, min(1.15, boost))
+
     # apply relational boost (clamped) — a confirmed A+ setup can slightly exceed 0.90
     new_score = max(0.0, min(1.0, base.chosen_score * boost))
     return Decision(

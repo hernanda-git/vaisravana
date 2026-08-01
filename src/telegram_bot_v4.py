@@ -424,6 +424,8 @@ class TelegramNotifier:
         wr = o.get("win_rate_pct", 0.0)
 
         body = [
+            f"v{html_escape(version)}",
+            "",
             f"🗄️ <b>Database</b>",
             "",
             f"📈 WR       <code>{wr:.1f}%</code> "
@@ -439,6 +441,131 @@ class TelegramNotifier:
         ]
 
         return self.send_message(self._card("🗄️", "Database Stats", body))
+
+    # ── Backward-compat methods (v3/v2 API) ─────────────────────────
+
+    def notify_decision(
+        self,
+        pair: str,
+        tf: str,
+        signal: str,
+        confidence: float,
+        side: str,
+        reason: str,
+    ) -> bool:
+        """Legacy: notify a decision/signal. Maps to a simple card."""
+        side_icon = "🟢" if side == "BUY" else "🔴"
+        direction = "LONG" if side == "BUY" else "SHORT"
+        pair_display = html_escape(pair)
+        reason_escaped = html_escape(reason)
+
+        body = [
+            f"<code>{pair_display}</code> {tf}",
+            "",
+            f"Signal    <code>{html_escape(signal)}</code>",
+            f"Direction {side_icon} <code>{side}</code>",
+            f"Confidence <code>{confidence:.0%}</code>",
+            "",
+            f"Reason    <code>{reason_escaped}</code>",
+        ]
+        return self.send_message(self._card("📡", "Decision", body))
+
+    def notify_fill(
+        self,
+        pair: str,
+        tf: str,
+        side: str,
+        entry: float,
+        sl: float,
+        tp: float,
+        leverage: float,
+    ) -> bool:
+        """Legacy: notify a trade fill. Maps to trade open card."""
+        side_icon = "🟢" if side == "BUY" else "🔴"
+        direction = "LONG" if side == "BUY" else "SHORT"
+        pair_display = html_escape(pair)
+
+        body = [
+            f"<code>{pair_display}</code> {tf}",
+            "",
+            f"Direction {side_icon} {direction}",
+            f"entry:    {_fmt_price(entry)}",
+            f"sl:       {_fmt_price(sl)}",
+            f"tp:       {_fmt_price(tp)}",
+            "",
+            f"leverage  <code>{_fmt_number(leverage, 1)}x</code>",
+            f"fees     <code>0.0000$</code>",
+            f"win rate: <code>—</code>",
+        ]
+        return self.send_message(self._card("🌊", f"{direction} {pair_display}", body))
+
+    def notify_close(
+        self,
+        pair: str,
+        tf: str,
+        side: str,
+        exit_price: float,
+        exit_reason: str,
+        pnl_r: float,
+        is_win: bool,
+    ) -> bool:
+        """Legacy: notify a trade close. Maps to trade close card."""
+        result_text = "WIN" if is_win else "LOSS"
+        result_icon = "🟢" if is_win else "🔴"
+        pnl_icon = "📈" if is_win else "📉"
+        side_icon = "🟢" if side == "BUY" else "🔴"
+        direction = "LONG" if side == "BUY" else "SHORT"
+        pair_display = html_escape(pair)
+
+        body = [
+            f"<code>{pair_display}</code> {side_icon} {direction}",
+            "",
+            f"Exit      {_fmt_price(exit_price)}",
+            f"R         {_fmt_r(pnl_r)}",
+            f"{pnl_icon} pnl:  <code>{pnl_r:+.2f}R</code>",
+            f"{pnl_icon} net:  <code>{pnl_r:+.2f}R</code>",
+            "",
+            f"Exit: {html_escape(exit_reason)}",
+        ]
+        return self.send_message(self._card("🌊", f"{result_text} {pair_display}", body))
+
+    def notify_status(self, pair: str, text: str) -> bool:
+        """Legacy: notify a status update. Plain text fallback on parse error."""
+        pair_display = html_escape(pair)
+        text_escaped = html_escape(text)
+
+        body = [
+            f"<code>{pair_display}</code>",
+            "",
+            f"<i>{text_escaped}</i>",
+        ]
+        return self.send_message(self._card("📊", "Status", body))
+
+    def notify_health_check(
+        self,
+        version: str,
+        region: str,
+        open_n: int,
+        feed_ok: bool = True,
+        notes: str = "",
+    ) -> bool:
+        """Health check with version header and SEHAT status."""
+        status = "🟢 SEHAT" if feed_ok else "🔴 FEED BERMASALAH"
+
+        body = [
+            f"v{html_escape(version)}",
+            "",
+            f"📡 Status    {status}",
+            f"🌍 Region    <code>{html_escape(region)}</code>",
+            f"📂 Positions <code>{open_n}</code> open",
+            f"⏰ Uptime    <i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>",
+        ]
+
+        if notes:
+            body.append("")
+            body.append(f"<i>{html_escape(notes)}</i>")
+
+        return self.send_message(self._card("💚", "Health Check", body))
 
 
 class TelegramCommandListener:

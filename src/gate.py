@@ -37,7 +37,7 @@ class TwoLayerGate:
         self.cooldown_s = cooldown_s
         self.max_leverage = max_leverage
         self.daily_loss_limit_pct = daily_loss_limit_pct
-        self.cvd_veto_z = cvd_veto_z if cvd_veto_z is not None else float(_os.getenv("VAISRAVANA_CVD_VETO_Z", "1.0"))
+        self.cvd_veto_z = cvd_veto_z if cvd_veto_z is not None else float(_os.getenv("VAISRAVANA_CVD_VETO_Z", "2.0"))
         self._clock = clock
         self._last_entry: dict[str, float] = {}      # pair -> last entry ts (cooldown)
         self._seen_correlation: set[str] = set()     # idempotency (doc 32 L5)
