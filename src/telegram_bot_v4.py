@@ -479,25 +479,125 @@ class TelegramNotifier:
         sl: float,
         tp: float,
         leverage: float,
+        *,
+        conf: float = 0.0,
+        fee_usd: float = 0.0,
+        size: float = 0.0,
+        stats: dict | None = None,
     ) -> bool:
-        """Legacy: notify a trade fill. Maps to trade open card."""
+        """v5: Trade open notification — clean, professional, shows SL/TP/fee/balance."""
         side_icon = "🟢" if side == "BUY" else "🔴"
         direction = "LONG" if side == "BUY" else "SHORT"
         pair_display = html_escape(pair)
 
+        # Extract stats
+        balance = stats.get("balance", 0.0) if stats else 0.0
+        used = stats.get("used_margin", 0.0) if stats else 0.0
+        unrealized = stats.get("unrealized", 0.0) if stats else 0.0
+        realized = stats.get("realized_pnl", 0.0) if stats else 0.0
+        free = balance - used
+
         body = [
-            f"<code>{pair_display}</code> {tf}",
+            f"<code>{pair_display}</code> {side_icon} {direction}",
             "",
-            f"Direction {side_icon} {direction}",
-            f"entry:    {_fmt_price(entry)}",
-            f"sl:       {_fmt_price(sl)}",
-            f"tp:       {_fmt_price(tp)}",
+            f"Entry     {_fmt_price(entry)}",
+            f"SL        {_fmt_price(sl)}",
+            f"TP        {_fmt_price(tp)}",
             "",
-            f"leverage  <code>{_fmt_number(leverage, 1)}x</code>",
-            f"fees     <code>0.0000$</code>",
-            f"win rate: <code>—</code>",
+            f"Size      <code>{_fmt_number(size, 2)}</code>",
+            f"Leverage  <code>{_fmt_number(leverage, 1)}x</code>",
+            f"Conf      <code>{_fmt_pct(conf * 100)}</code>",
+            "",
+            f"Fee       <code>-{fee_usd:.4f}$</code>",
         ]
-        return self.send_message(self._card("🌊", f"{direction} {pair_display}", body))
+
+        footer = [
+            f"Balance   <code>{_fmt_number(balance, 4)}$</code>",
+            f"Used      <code>{_fmt_number(used, 4)}$</code>",
+            f"Free      <code>{_fmt_number(free, 4)}$</code>",
+            f"Unreal.   {_fmt_usd(unrealized)}",
+            f"Realized  {_fmt_usd(realized)}",
+            "",
+            f"⏳ Engine monitoring SL/TP...",
+        ]
+
+        return self.send_message(self._card("🌊", f"OPEN {pair_display}", body, footer))
+
+    def notify_close(
+        self,
+        pair: str,
+        tf: str,
+        side: str,
+        exit_price: float,
+        reason: str,
+        pnl_r: float,
+        is_win: bool,
+        *,
+        fee_usd: float = 0.0,
+        net_usd: float = 0.0,
+        stats: dict | None = None,
+    ) -> bool:
+        """v5: Trade close notification — clean, professional, shows fee/PnL/balance."""
+        result_text = "WIN" if is_win else "LOSS"
+        result_icon = "🟢" if is_win else "🔴"
+        pnl_icon = "📈" if is_win else "📉"
+        side_icon = "🟢" if side == "BUY" else "🔴"
+        direction = "LONG" if side == "BUY" else "SHORT"
+        pair_display = html_escape(pair)
+
+        # Extract stats
+        balance = stats.get("balance", 0.0) if stats else 0.0
+        used = stats.get("used_margin", 0.0) if stats else 0.0
+        unrealized = stats.get("unrealized", 0.0) if stats else 0.0
+        realized = stats.get("realized_pnl", 0.0) if stats else 0.0
+        free = balance - used
+
+        # Win rate from DB if available
+        win_rate = stats.get("win_rate_pct", 0.0) if stats else 0.0
+        total_trades = stats.get("total_trades", 0) if stats else 0
+        wins = stats.get("wins", 0) if stats else 0
+        losses = stats.get("losses", 0) if stats else 0
+        total_fees = stats.get("total_fees", 0.0) if stats else 0.0
+
+        # Reason mapping
+        reason_map = {
+            "tp_hit": "🎯 TP Hit",
+            "sl_hit": "🛑 SL Hit",
+            "max_age": "⏱ Max Age",
+            "bias_flip": "🔄 Bias Flip",
+            "conf_collapse": "💥 Conf Collapse",
+            "bank_08r": "🏦 Bank 0.8R",
+            "SL": "🛑 SL Hit",
+            "TP": "🎯 TP Hit",
+            "MAXHOLD": "⏱ Max Age",
+            "STRUCTURE": "📐 Structure",
+        }
+        reason_text = reason_map.get(reason, f"❓ {reason}")
+
+        body = [
+            f"<code>{pair_display}</code> {side_icon} {direction}",
+            "",
+            f"Exit      {_fmt_price(exit_price)}",
+            f"R         {_fmt_r(pnl_r)}",
+            f"{pnl_icon} Net PnL {_fmt_usd(net_usd)}",
+            "",
+            f"Fee       <code>-{fee_usd:.4f}$</code>",
+        ]
+
+        footer = [
+            f"Balance   <code>{_fmt_number(balance, 4)}$</code>",
+            f"Used      <code>{_fmt_number(used, 4)}$</code>",
+            f"Free      <code>{_fmt_number(free, 4)}$</code>",
+            f"Unreal.   {_fmt_usd(unrealized)}",
+            f"Realized  {_fmt_usd(realized)}",
+            "",
+            f"📊 WR: <code>{wins}/{total_trades} ({win_rate:.1f}%)</code>",
+            f"📊 Fees:  <code>-{total_fees:.4f}$</code>",
+            "",
+            f"Exit: {reason_text}",
+        ]
+
+        return self.send_message(self._card("🌊", f"{result_text} {pair_display}", body, footer))
 
     def notify_close(
         self,

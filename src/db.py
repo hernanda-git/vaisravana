@@ -335,6 +335,8 @@ def paper_stats(conn: sqlite3.Connection, start_balance: float = 10.0,
     realized   = balance - start
     open_n     = count of open trades
     total_fees = SUM(fees_usd) over closed trades
+    win_rate   = portfolio-wide WR across all closed trades
+    wins/losses/total_trades = breakdown
     """
     row = conn.execute(
         "SELECT COALESCE(SUM(pnl_usd),0.0),"
@@ -352,6 +354,17 @@ def paper_stats(conn: sqlite3.Connection, start_balance: float = 10.0,
     margin = float(orow[1] or 0.0)
     open_n = int(orow[2] or 0)
     balance = start_balance + realized_pnl
+
+    # Win rate + wins/losses breakdown
+    wr_row = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(win),0) "
+        "FROM trade_logs WHERE ts_fully_closed IS NOT NULL"
+    ).fetchone()
+    total_trades = int(wr_row[0] or 0)
+    wins = int(wr_row[1] or 0)
+    losses = max(0, total_trades - wins)
+    win_rate_pct = round(100.0 * wins / total_trades, 1) if total_trades > 0 else 0.0
+
     return {
         "start_balance": start_balance,
         "balance": round(balance, 2),
@@ -361,6 +374,10 @@ def paper_stats(conn: sqlite3.Connection, start_balance: float = 10.0,
         "realized": round(realized_pnl, 2),
         "closed_n": closed_n,
         "total_fees": round(float(row[1] or 0.0), 4),
+        "win_rate_pct": win_rate_pct,
+        "wins": wins,
+        "losses": losses,
+        "total_trades": total_trades,
     }
 
 
