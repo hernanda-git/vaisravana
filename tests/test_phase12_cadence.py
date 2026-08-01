@@ -55,7 +55,7 @@ def test_decide_tick_acts_on_latest_closed_bar():
     (pair, '1m', side) — proving it acts on the latest closed bar and keys by decision_tf.
     """
     import config, lifecycle, safety, telemetry, db, decision
-    from telegram_bot import TelegramNotifier
+    from telegram_bot_v4 import TelegramNotifier
     from engines import MarketState
     from marketcontext import MarketContext
     import tempfile

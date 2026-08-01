@@ -19,7 +19,7 @@ from db import init_db, wipe_db  # noqa: E402
 from lifecycle import TradeLifecycle  # noqa: E402
 from safety import KillSwitch  # noqa: E402
 import bot_paper as b  # noqa: E402
-from telegram_bot import TelegramCommandListener  # noqa: E402
+from telegram_bot_v4 import TelegramCommandListener  # noqa: E402
 
 
 def _seed(conn):

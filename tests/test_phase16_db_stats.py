@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from db import init_db, db_stats, _fmt_bytes  # noqa: E402
-from telegram_bot import TelegramNotifier  # noqa: E402
+from telegram_bot_v4 import TelegramNotifier  # noqa: E402
 
 
 def _seed_trade(conn, trade_id, pair, tf, side, win, pnl):

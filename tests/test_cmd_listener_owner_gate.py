@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from telegram_bot import TelegramCommandListener
+from telegram_bot_v4 import TelegramCommandListener
 
 
 class _StubNotifier:

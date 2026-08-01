@@ -29,8 +29,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import marketdata, config, decision, lifecycle, safety, telemetry, db, version as vmod
-from telegram_bot import TelegramNotifier
-from telegram_bot import TelegramCommandListener  # noqa: E402
+from telegram_bot_v4 import TelegramNotifier
+from telegram_bot_v4 import TelegramCommandListener  # noqa: E402
 from sentinel import Sentinel
 from evaluation import evaluate
 from llm_research import LLMResearcher, NarrativeResearcher, ZenClient
