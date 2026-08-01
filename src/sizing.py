@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 # Reference ATR% at which leverage is "full" (base). Above this, scale down.
