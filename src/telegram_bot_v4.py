@@ -106,14 +106,14 @@ class TelegramNotifier:
         - /help       — List all commands
         """
         commands = [
-            {"command": "status", "description": "Bot status, WR, trades, positions, balance"},
-            {"command": "performance", "description": "Detailed performance: WR, avg R, net PnL, fees"},
-            {"command": "positions", "description": "Open positions with live PnL, SL, TP, R"},
-            {"command": "trades", "description": "Recent trades history with results"},
-            {"command": "version", "description": "Current version, changelog, uptime"},
-            {"command": "stop", "description": "Graceful shutdown after current cycle"},
-            {"command": "resume", "description": "Resume trading (if stopped)"},
-            {"command": "help", "description": "List all available commands"},
+            {"command": "vaisravana-status", "description": "Bot status, WR, trades, positions, balance"},
+            {"command": "vaisravana-performance", "description": "Detailed performance: WR, avg R, net PnL, fees"},
+            {"command": "vaisravana-positions", "description": "Open positions with live PnL, SL, TP, R"},
+            {"command": "vaisravana-trades", "description": "Recent trades history with results"},
+            {"command": "vaisravana-version", "description": "Current version, changelog, uptime"},
+            {"command": "vaisravana-stop", "description": "Graceful shutdown after current cycle"},
+            {"command": "vaisravana-resume", "description": "Resume trading (if stopped)"},
+            {"command": "vaisravana-help", "description": "List all available commands"},
         ]
         try:
             r = httpx.post(
@@ -124,8 +124,9 @@ class TelegramNotifier:
             ok = r.status_code == 200 and r.json().get("ok")
             if ok:
                 self.send_message(
-                    "ℹ️ Commands registered: /status /performance /positions /trades "
-                    "/version /stop /resume /help"
+                    "ℹ️ Commands registered: /vaisravana-status /vaisravana-performance "
+                    "/vaisravana-positions /vaisravana-trades /vaisravana-version "
+                    "/vaisravana-stop /vaisravana-resume /vaisravana-help"
                 )
             return ok
         except Exception:
