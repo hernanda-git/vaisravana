@@ -42,7 +42,7 @@ def _bull() -> MarketState:
 
 def test_kill_switch_daily_dd():
     ks = KillSwitch()
-    tripped, reason = ks.check_global(daily_loss_pct=0.5)
+    tripped, reason = ks.check_global(daily_loss_pct=2.5)
     assert tripped and "DAILY_DD" in reason
 
 

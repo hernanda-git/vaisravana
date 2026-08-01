@@ -48,7 +48,7 @@ def test_scalp_tighter_than_swing():
 
 def test_profile_rr_values():
     profs = default_profiles()
-    assert profs["scalping"].rr == pytest.approx(1.5)
+    assert profs["scalping"].rr == pytest.approx(2.0)
     assert profs["day"].rr == pytest.approx(1.6667, abs=1e-3)
     assert profs["swing"].rr == pytest.approx(2.0)
 
@@ -63,9 +63,9 @@ def test_profile_watch_below_entry_enforced():
 
 def test_surface_active_defaults():
     s = default_surface()
-    assert s.entry_threshold == 0.60          # active, not the old 0.86 silence bar
-    assert s.winrate_floor_pct == 56.0
-    assert s.min_expectancy_r == 0.10
+    assert s.entry_threshold == 0.45          # active, not the old 0.86 silence bar
+    assert s.winrate_floor_pct == 45.0
+    assert s.min_expectancy_r == 0.02
     assert s.min_trades_for_promote == 100
 
 

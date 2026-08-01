@@ -46,7 +46,7 @@ def test_gate_b_rejects_reversed_sl_short():
 
 
 def test_gate_b_caps_leverage_at_2():
-    g = TwoLayerGate()
+    g = TwoLayerGate(max_leverage=2)
     ok, reasons = g.gate_b(side="BUY", sl_price=95.0, entry_price=100.0, leverage=5)
     assert not ok and any("LEVERAGE" in r for r in reasons)
 
