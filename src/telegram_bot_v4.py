@@ -409,6 +409,24 @@ class TelegramNotifier:
         ]
 
         return self.send_message(self._card("🚀", "Bot Startup", body))
+    
+    def notify_deploy(self, version: str, changelog: str) -> bool:
+        """Announce the deployed version + what changed (Bahasa Indonesia)."""
+        body = (changelog or "").strip()
+        lines = []
+        for ln in body.split("\n"):
+            ln = ln.strip()
+            if not ln:
+                continue
+            lines.append("• " + ln.lstrip("- ").lstrip("• "))
+        body = html_escape("\n".join(lines[:12])) or "<i>Belum ada catatan rilis.</i>"
+        text = (
+            f"🚀 <b>Vessavaṇa <code>v{html_escape(version)}</code> ter-deploy</b>\n"
+            f"\n"
+            f"<b>Perubahan:</b>\n"
+            f"{body}"
+        )
+        return self.send_message(text)
 
     # ── Status 30m ────────────────────────────────────────────────────
 
