@@ -93,16 +93,14 @@ from marketcontext import build_context, ContextSeries, MarketContext  # noqa: E
 from scoring import decide, decide_ctx  # noqa: E402
 from strategy import active_strategies, evaluate_strategy  # noqa: E402
 from config import default_profiles  # noqa: E402
-from symbols import resolve_symbol, DEFAULT_UNIVERSE  # noqa: E402
+from symbols import resolve_symbol  # noqa: E402
 
-PAIRS = os.getenv("VAISRAVANA_PAIRS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
-# v0.0.10: monitored universe defaults to the 15-pair mix (leaders + 12 requested alts).
-# Resolved through symbols.resolve_symbol() so "PEPE"/"BONK" map to their 1000x contract.
-PAIRS = [resolve_symbol(p) for p in
-         os.getenv("VAISRAVANA_PAIRS", ",".join(DEFAULT_UNIVERSE)).split(",") if p]
+# Universe ranker populates pairs dynamically from Binance exchangeInfo.
+# If VAISRAVANA_PAIRS is set, use it; otherwise ranker will populate at runtime.
+_PAIRS_INIT = os.getenv("VAISRAVANA_PAIRS", "").split(",") if os.getenv("VAISRAVANA_PAIRS") else []
+PAIRS = [resolve_symbol(p) for p in _PAIRS_INIT if p]
 # The higher structural contexts every strategy reads for bias + structure.
-TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
 # v0.0.32: data source is env-driven so the bot runs on any host (Fly, bare VPS, Tencent).
 # Binance fapi is geo-blocked in some regions (e.g. mainland CN) — point FETCH_URL at a
 # proxy/mirror there. No proxy support in urllib, so use a full URL override.
