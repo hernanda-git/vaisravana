@@ -92,6 +92,45 @@ class TelegramNotifier:
             self._client = httpx.Client(timeout=10)
         return self._client
 
+    def register_commands(self) -> bool:
+        """Register slash commands with Telegram so / shows a hint list.
+
+        Commands are designed for the owner to monitor and control the bot:
+        - /status     — Bot status, WR, trades, wins/losses, open positions, balance
+        - /performance — Detailed performance: WR, avg R, net PnL, fees, median R
+        - /positions  — Open positions with live PnL, SL, TP, R
+        - /trades     — Recent trades history with results
+        - /version    — Current version, changelog, uptime
+        - /stop       — Graceful shutdown
+        - /resume     — Resume trading (if stopped)
+        - /help       — List all commands
+        """
+        commands = [
+            {"command": "status", "description": "Bot status, WR, trades, positions, balance"},
+            {"command": "performance", "description": "Detailed performance: WR, avg R, net PnL, fees"},
+            {"command": "positions", "description": "Open positions with live PnL, SL, TP, R"},
+            {"command": "trades", "description": "Recent trades history with results"},
+            {"command": "version", "description": "Current version, changelog, uptime"},
+            {"command": "stop", "description": "Graceful shutdown after current cycle"},
+            {"command": "resume", "description": "Resume trading (if stopped)"},
+            {"command": "help", "description": "List all available commands"},
+        ]
+        try:
+            r = httpx.post(
+                f"{self._base}/setMyCommands",
+                json={"commands": commands},
+                timeout=10,
+            )
+            ok = r.status_code == 200 and r.json().get("ok")
+            if ok:
+                self.send_message(
+                    "ℹ️ Commands registered: /status /performance /positions /trades "
+                    "/version /stop /resume /help"
+                )
+            return ok
+        except Exception:
+            return False
+
     def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
         if self._chat_dead:
             return False
