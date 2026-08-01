@@ -103,6 +103,30 @@ class PaperOrchestrator:
         if key in self.open_trades:
             return CandleOutcome(record, None)
 
+        # Fee-aware +EV check: every trade must be profitable after fees.
+        # Fee floor = open_fee + close_fee = 0.02% + 0.04% = 0.06% of notional.
+        # The trade must recover this cost with room to spare.
+        # Minimum R to be +EV after fees: fee_floor_r = (open_fee + close_fee) / risk_per_r
+        # For a $10 account with 0.25% risk/trade and typical SL of 0.5%:
+        #   risk_per_r = $10 * 0.0025 / 0.005 = $5.00
+        #   total_fees = notional * 0.0006 ≈ $5 * 0.0006 = $0.003
+        #   fee_floor_r = $0.003 / $5.00 = 0.0006R — negligible for normal trades
+        # But for micro-trades or wide spreads, this check prevents fee bleed.
+        sl_dist = abs(entry_price - sl)
+        if sl_dist > 0:
+            risk_per_r = (entry_price * 1.0) * (sl_dist / entry_price)  # $ risk per 1R
+            notional = entry_price * 1.0  # qty=1.0 in paper mode
+            total_fee_rate = 0.0002 + 0.0004  # maker open + taker close
+            total_fees = notional * total_fee_rate
+            fee_floor_r = total_fees / risk_per_r if risk_per_r > 0 else 0.0
+            # Minimum R:R to be +EV after fees is fee_floor_r.
+            # If the surface's R:R is below this, skip the trade.
+            surface_rr = self.surface.tp_atr_mult / self.surface.sl_atr_mult if self.surface.sl_atr_mult else 0.0
+            if surface_rr < fee_floor_r + 0.01:  # 0.01R safety margin
+                self.telemetry.exec_event(record.correlation_id, state.symbol, state.tf,
+                                          "SKIP_FEE_EV", side=record.side or "")
+                return CandleOutcome(record, None)
+
         # 2. paper fill at entry (LIMIT@mid assumption, doc 30 §3)
         trade = self.lifecycle.open(
             correlation_id=record.correlation_id,

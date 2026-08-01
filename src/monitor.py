@@ -139,29 +139,32 @@ class PositionMonitor:
                 self._market_close(pos, "TP", mark)
                 continue
 
-            # 2b. bank_08r (ported from wave bot WR 67%): once R >= +0.08,
-            # trail SL to +0.05R to lock profit early instead of grinding to
-            # MAXHOLD. This is the single biggest WR lever on the wave side.
+            # 2b. bank_08r: once R >= +0.08, trail SL to lock profit.
+            # SL trails to +0.05R from entry (not a fixed price offset).
+            # This locks real profit progressively so a wave that peaks and
+            # retraces banks a win instead of round-tripping to a loss.
             r_now = self._unrealized_r(pos, mark)
             if r_now >= 0.08:
-                if pos.side == "BUY":
-                    new_sl = pos.entry_price * (1 + 0.0005)
-                    if pos.sl.stop_price < new_sl:
-                        pos.sl.stop_price = new_sl
-                        if self.exchange is not None and hasattr(self.exchange, "update_sl"):
-                            try:
-                                self.exchange.update_sl(pos, new_sl)
-                            except Exception:
-                                pass
-                else:
-                    new_sl = pos.entry_price * (1 - 0.0005)
-                    if pos.sl.stop_price > new_sl:
-                        pos.sl.stop_price = new_sl
-                        if self.exchange is not None and hasattr(self.exchange, "update_sl"):
-                            try:
-                                self.exchange.update_sl(pos, new_sl)
-                            except Exception:
-                                pass
+                risk = abs(pos.entry_price - pos.sl.stop_price)
+                if risk > 0:
+                    if pos.side == "BUY":
+                        new_sl = pos.entry_price + 0.05 * risk
+                        if pos.sl.stop_price < new_sl:
+                            pos.sl.stop_price = new_sl
+                            if self.exchange is not None and hasattr(self.exchange, "update_sl"):
+                                try:
+                                    self.exchange.update_sl(pos, new_sl)
+                                except Exception:
+                                    pass
+                    else:
+                        new_sl = pos.entry_price - 0.05 * risk
+                        if pos.sl.stop_price > new_sl:
+                            pos.sl.stop_price = new_sl
+                            if self.exchange is not None and hasattr(self.exchange, "update_sl"):
+                                try:
+                                    self.exchange.update_sl(pos, new_sl)
+                                except Exception:
+                                    pass
 
             # 2c. conf_collapse gate (v2 redesign): exit on adverse excursion
             # only when the excursion is large enough that fee-aware exit is

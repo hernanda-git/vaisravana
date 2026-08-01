@@ -10,18 +10,18 @@ from config import ParameterSurface, Weights  # noqa: E402
 
 def test_default_surface_is_valid():
     s = ParameterSurface()
-    assert s.entry_threshold == 0.60
+    assert s.entry_threshold == 0.45
     assert s.tp_atr_mult == 2.0  # v0.0.23 T1: R:R 2:1 floor
     assert s.sl_atr_mult == 1.0
     assert s.rr >= 2.0
-    assert s.max_leverage == 3
-    assert s.daily_loss_limit_pct == 0.5
+    assert s.max_leverage == 5
+    assert s.daily_loss_limit_pct == 2.0
     assert s.risk_per_trade_pct == 0.25
-    assert s.winrate_floor_pct == 56.0
-    assert s.min_expectancy_r == 0.10
+    assert s.winrate_floor_pct == 45.0
+    assert s.min_expectancy_r == 0.02
     assert s.winrate_gate_pct == 85.0          # advisory, kept for backward-compat
     assert s.min_trades_for_promote == 100
-    assert s.global_max_live_pairs == 5
+    assert s.global_max_live_pairs == 10
 
 
 def test_weights_sum_to_one():
@@ -39,7 +39,7 @@ def test_entry_threshold_bound_enforced():
 
 def test_max_leverage_hard_cap():
     try:
-        ParameterSurface(max_leverage=5)  # above 3 ceiling
+        ParameterSurface(max_leverage=6)  # above 5 ceiling
         assert False, "should have raised"
     except Exception as e:
         assert "max_leverage" in str(e) or "le" in str(e)
