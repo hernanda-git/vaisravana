@@ -96,10 +96,20 @@ from config import default_profiles  # noqa: E402
 from symbols import resolve_symbol  # noqa: E402
 
 TFS = os.getenv("VAISRAVANA_TFS", "5m,15m").split(",")
-# Universe ranker populates pairs dynamically from Binance exchangeInfo.
-# If VAISRAVANA_PAIRS is set, use it; otherwise ranker will populate at runtime.
-_PAIRS_INIT = os.getenv("VAISRAVANA_PAIRS", "").split(",") if os.getenv("VAISRAVANA_PAIRS") else []
-PAIRS = [resolve_symbol(p) for p in _PAIRS_INIT if p]
+# Universe ranker: dynamically selects pairs each cycle from Binance 24hr tickers.
+# Falls back to VAISRAVANA_PAIRS env var if ranker is unavailable.
+from binance_universe import select_pairs as _select_universe_pairs  # noqa: E402
+
+def _get_pairs() -> list[str]:
+    """Return trading pairs using universe ranker or env fallback."""
+    pairs = _select_universe_pairs()
+    if pairs:
+        return [resolve_symbol(p) for p in pairs]
+    _init = os.getenv("VAISRAVANA_PAIRS", "").split(",") if os.getenv("VAISRAVANA_PAIRS") else []
+    return [resolve_symbol(p) for p in _init if p]
+
+# PAIRS refreshed dynamically each cycle via _get_pairs()
+PAIRS: list[str] = _get_pairs()
 # The higher structural contexts every strategy reads for bias + structure.
 # v0.0.32: data source is env-driven so the bot runs on any host (Fly, bare VPS, Tencent).
 # Binance fapi is geo-blocked in some regions (e.g. mainland CN) — point FETCH_URL at a
@@ -875,6 +885,7 @@ def _persist_decisions_log(conn, pair, tf, state, se, decision, reason=None):
 
 
 def run() -> None:
+    global PAIRS
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     # v0.0.37: honour a persistent owner /stop flag across container restarts.
@@ -1301,6 +1312,8 @@ def run() -> None:
                 equity = max(float(_ps["balance"]), 0.0)
             except Exception as _e:
                 log.debug("live equity refresh failed: %s", _e)
+            # Refresh pairs dynamically from universe ranker each cycle
+            PAIRS = _get_pairs()
             # mark feed health from the latest candle we just fetched
             for pair in PAIRS:
                 for tf in decision_tfs + TFS:
