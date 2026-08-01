@@ -88,6 +88,7 @@ from marketdata import FeedHealth  # noqa: E402
 from mode import ModeGuard, PaperSimExchange  # noqa: E402
 from monitor import PositionMonitor, Position  # noqa: E402
 from execution import place_stop_loss  # noqa: E402
+from sizing import kelly_risk_pct, update_trailing_stop, check_partial_take_profit  # noqa: E402
 from marketcontext import build_context, ContextSeries, MarketContext  # noqa: E402
 from scoring import decide, decide_ctx  # noqa: E402
 from strategy import active_strategies, evaluate_strategy  # noqa: E402
@@ -1369,38 +1370,66 @@ def run() -> None:
                     cd_key = (ev.symbol, ev.side)
                     cooldowns[cd_key] = SL_COOLDOWN_TICKS
                     log.debug("SL cooldown %s: %d ticks", cd_key, SL_COOLDOWN_TICKS)
-            # v0.0.19: trailing stop — if a trade reaches +0.5R, move SL to break-even
+            # P1-36: enhanced trailing stop + partial take profit
             for (sym, tf_, side_), trade in list(open_trades.items()):
                 price = getattr(exchange, '_prices', {}).get(sym)
                 if price is None:
                     continue
-                unrealized_r = (price - trade.entry_price) / abs(trade.entry_price - trade.sl_price) \
-                    if trade.side == "BUY" else (trade.entry_price - price) / abs(trade.entry_price - trade.sl_price)
                 # v0.0.34: excursion tracking — persist real MFE/MAE at close
-                # (instrumentation fix: both columns were NULL all of run 1).
                 _exc = EXCURSIONS.get(trade.correlation_id)
                 if _exc is not None:
+                    unrealized_r = (price - trade.entry_price) / abs(trade.entry_price - trade.sl_price) \
+                        if trade.side == "BUY" else (trade.entry_price - price) / abs(trade.entry_price - trade.sl_price)
                     _exc[0] = max(_exc[0], unrealized_r)
                     _exc[1] = min(_exc[1], unrealized_r)
-                old_sl = trade.sl_price
-                if trade.side == "BUY" and unrealized_r >= BE_TRAIL_ARM_R and old_sl < trade.entry_price:
-                    new_sl = trade.entry_price * 0.9999  # very slight buffer
+                # P1-36: trailing stop — move SL to BE at +0.10R, trail at 0.08R behind high/low
+                new_sl, action = update_trailing_stop(
+                    trade, price,
+                    arm_at_r=0.5,
+                    trail_at_r=0.08,
+                    move_to_breakeven_at_r=0.10,
+                )
+                if new_sl is not None:
                     if monitor is not None:
                         for pos in monitor.positions.values():
                             if pos.correlation_id == trade.correlation_id:
                                 pos.sl.stop_price = new_sl
                                 break
                     trade.sl_price = new_sl
-                    log.debug("trailing SL %s %s moved to BE (R=%.2f)", sym, side_, unrealized_r)
-                elif trade.side == "SELL" and unrealized_r >= BE_TRAIL_ARM_R and old_sl > trade.entry_price:
-                    new_sl = trade.entry_price * 1.0001
-                    if monitor is not None:
-                        for pos in monitor.positions.values():
-                            if pos.correlation_id == trade.correlation_id:
-                                pos.sl.stop_price = new_sl
-                                break
-                    trade.sl_price = new_sl
-                    log.debug("trailing SL %s %s moved to BE (R=%.2f)", sym, side_, unrealized_r)
+                    log.debug("P1-36 trailing %s %s: %s (SL→%.6f)", sym, side_, action, new_sl)
+                # P1-36: partial take profit — close 50% at +0.75R, move remaining SL to +0.30R
+                should_partial, partial_size, remaining_sl = check_partial_take_profit(
+                    trade, price,
+                    partial_at_r=0.75,
+                    partial_pct=0.50,
+                    remaining_sl_at_r=0.30,
+                )
+                if should_partial:
+                    # Close partial position — simulate by reducing size
+                    partial_pnl_r = (price - trade.entry_price) / abs(trade.entry_price - trade.sl_price) \
+                        if trade.side == "BUY" else (trade.entry_price - price) / abs(trade.entry_price - trade.sl_price)
+                    partial_fee = FEE_RATE_MAKER * trade.entry_price * partial_size + FEE_RATE * price * partial_size
+                    partial_pnl = (price - trade.entry_price) * partial_size * (1.0 if trade.side == "BUY" else -1.0)
+                    partial_net = partial_pnl - partial_fee
+                    log.info("P1-36 partial TP %s %s: close %.4f @ %.6f (R=%.2f, net=%.4f$)",
+                             sym, side_, partial_size, price, partial_pnl_r, partial_net)
+                    # Update trade size and SL for remaining position
+                    trade.size -= partial_size
+                    if remaining_sl is not None:
+                        trade.sl_price = remaining_sl
+                        if monitor is not None:
+                            for pos in monitor.positions.values():
+                                if pos.correlation_id == trade.correlation_id:
+                                    pos.sl.stop_price = remaining_sl
+                                    pos.qty = trade.size
+                                    break
+                    # Log partial close to trade_logs
+                    now = datetime.now(timezone.utc).isoformat()
+                    conn.execute(
+                        "UPDATE trade_logs SET ts_partial_close=? WHERE trade_id=?",
+                        (now, trade.trade_id),
+                    )
+                    conn.commit()
             # v0.0.19: decrement cooldowns each cycle
             expired = [k for k, v in cooldowns.items() if v <= 1]
             for k in expired:
@@ -1765,18 +1794,23 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
         # so a 1-SL move costs a similar fraction of equity in any vol regime (fixes
         # F5: thin margin + fixed 2x = tail wipeout). Falls back to base when ATR
         # unknown.
-        from sizing import regime_leverage, sl_risk_pct
+        # P1-36: Kelly Criterion sizing — dynamically adjust risk based on actual edge
+        from sizing import regime_leverage, sl_risk_pct, kelly_risk_pct
         _atr_pct = pair_atr.get(pair, 0.0)
         lev_used = regime_leverage(surface.max_leverage, atr_pct=_atr_pct,
                                    regime=getattr(state, "regime", "range"))
-        # real risk-based sizing (doc 30 §3): 0.25% equity at the SL distance
+        # Kelly sizing: read actual edge from trade_logs, adjust risk_per_trade
+        kelly_risk = kelly_risk_pct(conn, pair, se.side, surface.risk_per_trade_pct)
+        if kelly_risk != surface.risk_per_trade_pct:
+            log.debug("Kelly sizing %s %s: %.3f%% (base %.3f%%)", pair, se.side, kelly_risk, surface.risk_per_trade_pct)
+        # real risk-based sizing (doc 30 §3): Kelly-adjusted risk at the SL distance
         info = (registry or SymbolRegistry()).get(pair)
         sl_distance = abs(entry - sl)
         if info is None or sl_distance <= 0 or entry <= 0:
             log.info("sizing skip %s: no symbol info or degenerate SL", pair)
             continue
         qty = size_position(equity=equity,
-                            risk_per_trade_pct=surface.risk_per_trade_pct,
+                            risk_per_trade_pct=kelly_risk,
                             entry=entry, sl_price=sl, leverage=lev_used,
                             info=info, max_position_notional_pct=surface.max_position_notional_pct)
         if qty <= 0:
