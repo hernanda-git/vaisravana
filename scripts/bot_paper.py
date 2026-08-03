@@ -1159,20 +1159,85 @@ def run() -> None:
         except Exception as e:
             log.exception("health report failed: %s", e)
 
+    def performance_report() -> None:
+        """Owner-facing performance alias used by the Telegram command menu."""
+        try:
+            s = db.paper_stats(conn, start_balance=START_BALANCE, fee_rate=FEE_RATE)
+            notifier.send_message(
+                "<b>📈 Vessavaṇa Performance</b>\n"
+                f"Balance: <code>${s['balance']:.4f}</code>\n"
+                f"Realized: <code>${s['realized']:+.4f}</code>\n"
+                f"Fees: <code>${-s['total_fees']:.4f}</code>\n"
+                f"WR: <code>{s['wins']}/{s['total_trades']} ({s['win_rate_pct']:.1f}%)</code>\n"
+                f"Open: <code>{s['open_n']}</code>")
+        except Exception as e:
+            notifier.send_message(f"❌ Performance query failed: {e}")
+
+    def trades_report() -> None:
+        try:
+            rows = conn.execute(
+                "SELECT pair, side, pnl_usd, fees_usd, r_multiple, close_reason "
+                "FROM trade_logs WHERE ts_closed IS NOT NULL ORDER BY ts_closed DESC LIMIT 10"
+            ).fetchall()
+            lines = ["<b>🧾 Recent Trades</b>"]
+            for r in rows:
+                net = (r['pnl_usd'] or 0.0) - (r['fees_usd'] or 0.0)
+                lines.append(f"• <code>{r['pair']}</code> {r['side']} "
+                             f"net <code>${net:+.4f}</code> R {r['r_multiple'] or 0:.2f} "
+                             f"{r['close_reason'] or '—'}")
+            notifier.send_message("\n".join(lines) if rows else "📭 No closed trades.")
+        except Exception as e:
+            notifier.send_message(f"❌ Trades query failed: {e}")
+
+    def help_report() -> None:
+        notifier.send_message(
+            "<b>Vessavaṇa commands</b>\n"
+            "/vaisravana_status · /vaisravana_performance\n"
+            "/vaisravana_positions · /vaisravana_trades\n"
+            "/vaisravana_version · /vaisravana_stop\n"
+            "/vaisravana_resume · /vaisravana_help")
+
     def _dispatch(text: str, _raw: str) -> None:
         cmd = text.split()[0].split("@")[0].lower()
         args = text.split()[1:] if len(text.split()) > 1 else []
+        # Telegram menu uses the bot-specific underscore commands. Normalize
+        # both prefixed forms and legacy bare commands into one dispatcher.
+        cmd = {
+            "/vaisravana_status": "/status",
+            "/vaisravana_performance": "/performance",
+            "/vaisravana_positions": "/positions",
+            "/vaisravana_trades": "/trades",
+            "/vaisravana_version": "/version",
+            "/vaisravana_stop": "/stop",
+            "/vaisravana_resume": "/resume",
+            "/vaisravana_help": "/help",
+        }.get(cmd, cmd)
         if cmd == "/clean":
             clean_state()
         elif cmd == "/stop":
             stop_bot()
         elif cmd == "/status":
             health_report()
+        elif cmd == "/performance":
+            performance_report()
         elif cmd == "/health":
             # legacy alias; the other bot (xvalarion) owns /health now.
             health_report()
         elif cmd == "/positions":
             _send_positions()
+        elif cmd == "/trades":
+            trades_report()
+        elif cmd == "/version":
+            notifier.send_message(f"<b>Vessavaṇa</b> v{vmod.read_version()}\nPAPER mode")
+        elif cmd == "/help":
+            help_report()
+        elif cmd == "/resume":
+            try:
+                os.remove(STOP_FLAG_PATH)
+            except OSError:
+                pass
+            control["stop"] = False
+            notifier.send_message("✅ Vessavaṇa resume requested. Persistent stop flag cleared.")
         elif cmd == "/pairs":
             _send_pairs()
         elif cmd == "/config":
