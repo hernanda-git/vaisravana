@@ -299,7 +299,7 @@ class TelegramNotifier:
 
         # Body: trade details
         body = [
-            f"<code>{pair_display}</code> {side_icon} {direction}",
+            f"{direction} {pair_display} {side_icon}",
             "",
             f"Entry     {_fmt_price(entry)}",
             f"Exit      {_fmt_price(exit_price)}",
@@ -550,17 +550,18 @@ class TelegramNotifier:
 
         # Extract stats
         balance = stats.get("balance", 0.0) if stats else 0.0
-        used = stats.get("used_margin", 0.0) if stats else 0.0
+        # accept canonical paper_stats keys and legacy notifier aliases
+        used = (stats.get("used_margin", stats.get("margin", stats.get("used", 0.0))) if stats else 0.0)
         unrealized = stats.get("unrealized", 0.0) if stats else 0.0
-        realized = stats.get("realized_pnl", 0.0) if stats else 0.0
+        realized = (stats.get("realized_pnl", stats.get("realized", 0.0)) if stats else 0.0)
         free = balance - used
 
         body = [
-            f"<code>{pair_display}</code> {side_icon} {direction}",
+            f"{direction} {pair_display} {side_icon}",
             "",
-            f"Entry     {_fmt_price(entry)}",
-            f"SL        {_fmt_price(sl)}",
-            f"TP        {_fmt_price(tp)}",
+            f"entry:    {_fmt_price(entry)}",
+            f"sl:       {_fmt_price(sl)}",
+            f"tp:       {_fmt_price(tp)}",
             "",
             f"Size      <code>{_fmt_number(size, 2)}</code>",
             f"Leverage  <code>{_fmt_number(leverage, 1)}x</code>",
@@ -575,6 +576,8 @@ class TelegramNotifier:
             f"Free      <code>{_fmt_number(free, 4)}$</code>",
             f"Unreal.   {_fmt_usd(unrealized)}",
             f"Realized  {_fmt_usd(realized)}",
+            f"WR        <code>{stats.get('wins', 0) if stats else 0}/{stats.get('total_trades', 0) if stats else 0} ({stats.get('win_rate_pct', 0.0) if stats else 0.0:.1f}%)</code>",
+            f"Fees      <code>-{stats.get('total_fees', 0.0) if stats else 0.0:.4f}$</code>",
             "",
             f"⏳ Engine monitoring SL/TP...",
         ]
@@ -605,9 +608,10 @@ class TelegramNotifier:
 
         # Extract stats
         balance = stats.get("balance", 0.0) if stats else 0.0
-        used = stats.get("used_margin", 0.0) if stats else 0.0
+        # accept canonical paper_stats keys and legacy notifier aliases
+        used = (stats.get("used_margin", stats.get("margin", stats.get("used", 0.0))) if stats else 0.0)
         unrealized = stats.get("unrealized", 0.0) if stats else 0.0
-        realized = stats.get("realized_pnl", 0.0) if stats else 0.0
+        realized = (stats.get("realized_pnl", stats.get("realized", 0.0)) if stats else 0.0)
         free = balance - used
 
         # Win rate from DB if available
@@ -633,11 +637,12 @@ class TelegramNotifier:
         reason_text = reason_map.get(reason, f"❓ {reason}")
 
         body = [
-            f"<code>{pair_display}</code> {side_icon} {direction}",
+            f"{direction} {pair_display} {side_icon}",
             "",
             f"Exit      {_fmt_price(exit_price)}",
             f"R         {_fmt_r(pnl_r)}",
-            f"{pnl_icon} Net PnL {_fmt_usd(net_usd)}",
+            f"pnl:      {_fmt_usd(net_usd)}",
+            f"net:      {_fmt_usd(net_usd)}",
             "",
             f"Fee       <code>-{fee_usd:.4f}$</code>",
         ]
@@ -657,35 +662,38 @@ class TelegramNotifier:
 
         return self.send_message(self._card("🌊", f"{result_text} {pair_display}", body, footer))
 
-    def notify_close(
-        self,
-        pair: str,
-        tf: str,
-        side: str,
-        exit_price: float,
-        exit_reason: str,
-        pnl_r: float,
-        is_win: bool,
+    def notify_partial(
+        self, pair: str, tf: str, side: str, price: float, size: float,
+        pnl_r: float, fee_usd: float, net_usd: float, remaining_size: float,
+        remaining_sl: float | None, stats: dict | None = None,
     ) -> bool:
-        """Legacy: notify a trade close. Maps to trade close card."""
-        result_text = "WIN" if is_win else "LOSS"
-        result_icon = "🟢" if is_win else "🔴"
-        pnl_icon = "📈" if is_win else "📉"
-        side_icon = "🟢" if side == "BUY" else "🔴"
+        """Notify a real partial close; never confuse it with a full close."""
+        s = stats or {}
+        balance = s.get("balance", 0.0)
+        used = s.get("used_margin", s.get("margin", s.get("used", 0.0)))
+        unrealized = s.get("unrealized", 0.0)
+        realized = s.get("realized_pnl", s.get("realized", 0.0))
+        free = balance - used
         direction = "LONG" if side == "BUY" else "SHORT"
-        pair_display = html_escape(pair)
-
         body = [
-            f"<code>{pair_display}</code> {side_icon} {direction}",
-            "",
-            f"Exit      {_fmt_price(exit_price)}",
-            f"R         {_fmt_r(pnl_r)}",
-            f"{pnl_icon} pnl:  <code>{pnl_r:+.2f}R</code>",
-            f"{pnl_icon} net:  <code>{pnl_r:+.2f}R</code>",
-            "",
-            f"Exit: {html_escape(exit_reason)}",
+            f"<code>{html_escape(pair)}</code> {'🟢' if side == 'BUY' else '🔴'} {direction}",
+            "", f"Partial exit  {_fmt_price(price)}",
+            f"Size closed <code>{_fmt_number(size, 4)}</code>",
+            f"Remaining   <code>{_fmt_number(remaining_size, 4)}</code>",
+            f"R           {_fmt_r(pnl_r)}",
+            f"Net PnL     {_fmt_usd(net_usd)}",
+            f"Fee         <code>-{fee_usd:.4f}$</code>",
+            f"Remaining SL {_fmt_price(remaining_sl)}",
         ]
-        return self.send_message(self._card("🌊", f"{result_text} {pair_display}", body))
+        footer = [
+            f"Balance   <code>{_fmt_number(balance, 4)}$</code>",
+            f"Used      <code>{_fmt_number(used, 4)}$</code>",
+            f"Free      <code>{_fmt_number(free, 4)}$</code>",
+            f"Unreal.   {_fmt_usd(unrealized)}",
+            f"Realized  {_fmt_usd(realized)}",
+            "", "⏳ Remaining position is still monitored.",
+        ]
+        return self.send_message(self._card("🌊", f"PARTIAL {html_escape(pair)}", body, footer))
 
     def notify_status(self, pair: str, text: str) -> bool:
         """Legacy: notify a status update. Plain text fallback on parse error."""

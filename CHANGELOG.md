@@ -1,5 +1,19 @@
 # Changelog — Project Vaiśravaṇa
 
+## 2026-08-03 — Telegram trade-event cards and controlled paper experiment
+
+- Added a dedicated `PARTIAL` Telegram card for meaningful partial exits; it reports
+  closed size, remaining size, remaining SL, fee, net PnL, and current paper equity.
+- Kept full `OPEN` and `CLOSE` cards fee-aware and populated with entry/SL/TP or exit,
+  balance, used/free margin, unrealized PnL, realized PnL, and cumulative trade stats.
+- Made notifier stats accept canonical `paper_stats` keys (`margin`, `realized`) as well
+  as legacy aliases, preventing misleading zero values in Telegram cards.
+- Preserved the one-shot partial-TP and database-backed daily-drawdown protections.
+- Documented the experiment, risk configuration, notification contract, evidence,
+  rollback, and monitoring rules in `docs/OPERATIONS-2026-08-03.md`.
+- Main bot remains PAPER-only; no live cutover was performed.
+
+
 ## v0.0.33 (2026-07-28)
 Fix Telegram slash commands broken after VPS migration.
 

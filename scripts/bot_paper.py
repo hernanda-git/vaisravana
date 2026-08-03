@@ -220,6 +220,9 @@ SIGNAL_FLIP_EXIT = os.getenv("VAISRAVANA_SIGNAL_FLIP_EXIT", "1") == "1"
 # shared risk-layer state (single-threaded decision loop → plain dict is safe)
 RISK_STATE: dict = {"hour": -1, "entries_hour": 0, "pair_last_entry": {},
                     "loss_streak": 0, "cooldown_until": 0.0}
+# A partial close is a one-shot event. Keep this in memory and consult
+# trade_logs.ts_partial_close so restarts cannot repeatedly close dust.
+PARTIAL_TP_DONE: set[str] = set()
 # per-trade excursion tracker {correlation_id: [mfe_r, mae_r]} — feeds the
 # mfe_r/mae_r columns that were NULL for the entire first run (instrumentation
 # fix: exit science is impossible without excursion data).
@@ -1302,16 +1305,27 @@ def run() -> None:
                             f"decisions_log >1d dihapus: <code>{deleted}</code> baris")
                 except Exception as e:  # never let pruning break the loop
                     log.debug("decisions_log purge failed: %s", e)
-            daily_loss_pct = (realized_loss_today["usd"] / equity * 100.0) if equity else 0.0
-            # v0.0.34: LIVE paper equity drives sizing. The first run sized
-            # against the static env equity ($1000) while the paper account
-            # held $10 — producing $956-notional ETH entries. Refresh from the
-            # DB each cycle; fall back to the env seed only if the read fails.
+            # v0.0.36: derive daily drawdown from the DB, including fees, so the
+            # kill switch survives restarts and cannot be bypassed by resetting the
+            # in-memory loss accumulator. Use closed NET losses since UTC midnight.
             try:
                 _ps = paper_stats(conn, start_balance=START_BALANCE, fee_rate=FEE_RATE)
                 equity = max(float(_ps["balance"]), 0.0)
             except Exception as _e:
                 log.debug("live equity refresh failed: %s", _e)
+            try:
+                _day = time.strftime("%Y-%m-%d")
+                _loss_row = conn.execute(
+                    "SELECT COALESCE(SUM(CASE WHEN (COALESCE(pnl_usd,0)-COALESCE(fees_usd,0)) < 0 "
+                    "THEN -(COALESCE(pnl_usd,0)-COALESCE(fees_usd,0)) ELSE 0 END),0) "
+                    "FROM trade_logs WHERE ts_fully_closed IS NOT NULL AND ts_fully_closed LIKE ?",
+                    (_day + "%",),
+                ).fetchone()
+                realized_loss_today["usd"] = float(_loss_row[0] or 0.0)
+                realized_loss_today["day"] = _day
+            except Exception as _e:
+                log.warning("daily loss DB refresh failed; retaining accumulator: %s", _e)
+            daily_loss_pct = (realized_loss_today["usd"] / equity * 100.0) if equity else 100.0
             # Refresh pairs dynamically from universe ranker each cycle
             PAIRS = _get_pairs()
             # mark feed health from the latest candle we just fetched
@@ -1408,14 +1422,18 @@ def run() -> None:
                                 break
                     trade.sl_price = new_sl
                     log.debug("P1-36 trailing %s %s: %s (SL→%.6f)", sym, side_, action, new_sl)
-                # P1-36: partial take profit — close 50% at +0.75R, move remaining SL to +0.30R
-                should_partial, partial_size, remaining_sl = check_partial_take_profit(
-                    trade, price,
-                    partial_at_r=0.75,
-                    partial_pct=0.50,
-                    remaining_sl_at_r=0.30,
-                )
-                if should_partial:
+                # P1-36: partial take profit is one-shot and meaningful. The old
+                # code re-triggered after the first close and emitted dust forever.
+                _partial_done = (trade.trade_id in PARTIAL_TP_DONE or
+                    conn.execute("SELECT ts_partial_close FROM trade_logs WHERE trade_id=?",
+                                 (trade.trade_id,)).fetchone()[0] is not None)
+                should_partial, partial_size, remaining_sl = ((False, 0.0, None)
+                    if _partial_done or trade.size <= 0 else check_partial_take_profit(
+                        trade, price, partial_at_r=0.75, partial_pct=0.50,
+                        remaining_sl_at_r=0.30))
+                if should_partial and partial_size > max(trade.size * 0.01, 1e-8):
+                    PARTIAL_TP_DONE.add(trade.trade_id)
+                    # Close partial position — simulate by reducing size
                     # Close partial position — simulate by reducing size
                     partial_pnl_r = (price - trade.entry_price) / abs(trade.entry_price - trade.sl_price) \
                         if trade.side == "BUY" else (trade.entry_price - price) / abs(trade.entry_price - trade.sl_price)
@@ -1434,13 +1452,22 @@ def run() -> None:
                                     pos.sl.stop_price = remaining_sl
                                     pos.qty = trade.size
                                     break
-                    # Log partial close to trade_logs
+                    # Log partial close to trade_logs and publish a dedicated
+                    # Telegram card. Partial fills are not full trade rows.
                     now = datetime.now(timezone.utc).isoformat()
                     conn.execute(
                         "UPDATE trade_logs SET ts_partial_close=? WHERE trade_id=?",
                         (now, trade.trade_id),
                     )
                     conn.commit()
+                    _get_mark = (lambda p: exchange.mark_price(p)) if exchange else None
+                    _stats = paper_equity(conn, open_trades, _get_mark)
+                    if hasattr(notifier, "notify_partial"):
+                        notifier.notify_partial(
+                            sym, tf_, side_, price, partial_size, partial_pnl_r,
+                            partial_fee, partial_net, trade.size, remaining_sl,
+                            stats=_stats,
+                        )
             # v0.0.19: decrement cooldowns each cycle
             expired = [k for k, v in cooldowns.items() if v <= 1]
             for k in expired:
