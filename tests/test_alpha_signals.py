@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from alpha_signals import cvd_divergence, regime_tp_multiplier
+from alpha_signals import cvd_divergence, cvd_entry_allowed, regime_tp_multiplier
 
 
 def test_cvd_positive_divergence_is_buy_candidate():
@@ -18,6 +18,11 @@ def test_cvd_negative_divergence_is_sell_candidate():
 
 def test_no_divergence_without_confirmation():
     assert cvd_divergence([-0.001, -0.001], 0.2).side is None
+
+
+def test_cvd_entry_requires_matching_side():
+    assert cvd_entry_allowed("BUY", [-0.001, -0.001], 1.5)[0]
+    assert not cvd_entry_allowed("SELL", [-0.001, -0.001], 1.5)[0]
 
 
 def test_regime_tp_is_bounded():

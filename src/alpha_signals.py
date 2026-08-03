@@ -14,6 +14,19 @@ class CvdDivergence:
     reason: str
 
 
+def cvd_entry_allowed(side: str, price_returns: list[float], cvd_z: float | None,
+                      *, min_strength: float = 0.55) -> tuple[bool, str]:
+    """Paper-only entry helper: require divergence to agree with the candidate side."""
+    d = cvd_divergence(price_returns, cvd_z)
+    if d.side is None:
+        return False, d.reason
+    if d.side != side:
+        return False, f"divergence side {d.side} conflicts with {side}"
+    if d.strength < min_strength:
+        return False, f"divergence strength {d.strength:.2f} < {min_strength:.2f}"
+    return True, d.reason
+
+
 def cvd_divergence(price_returns: list[float], cvd_z: float | None,
                    *, price_threshold: float = 0.0015,
                    cvd_threshold: float = 1.0) -> CvdDivergence:

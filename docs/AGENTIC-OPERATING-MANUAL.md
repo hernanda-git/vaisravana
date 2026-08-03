@@ -120,6 +120,10 @@ TP is enabled only with `VAISRAVANA_REGIME_ADAPTIVE_TP=1`. These helpers do not
 place orders and the default behavior remains unchanged until an A/B sample proves
 fee-adjusted improvement.
 
+The deployed experiment uses `VAISRAVANA_CVD_ENTRY_MODE=shadow`: CVD candidates
+are research-only until candidate metadata is persisted and compared against the
+actual strategy. This prevents an unvalidated trigger from changing fills.
+
 1. expose `_persist_decisions_log` failures at warning level with a rate limit and error category. (warning-level rate limiting is now implemented; freshness metrics remain.)
 2. add a telemetry freshness check for each table.
 3. synchronize source workspace and deployed tree through an explicit build/deploy command.
