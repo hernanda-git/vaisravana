@@ -195,6 +195,9 @@ FEE_R_MAX_FRAC = float(os.getenv("VAISRAVANA_FEE_R_MAX_FRAC", "0.25"))
 MIN_TP_MOVE_PCT = float(os.getenv("VAISRAVANA_MIN_TP_MOVE_PCT", "0.24"))
 MAX_ENTRIES_PER_HOUR = int(os.getenv("VAISRAVANA_MAX_ENTRIES_PER_HOUR", "10"))
 PAIR_ENTRY_SPACING_S = int(os.getenv("VAISRAVANA_PAIR_ENTRY_SPACING_S", "900"))
+# paper-only research mode: continue simulated collection after a kill trip.
+# live mode never bypasses the safety halt.
+PAPER_COLLECT_AFTER_KILL = os.getenv("VAISRAVANA_PAPER_COLLECT_AFTER_KILL", "0") == "1"
 SESSION_BLOCK_UTC = {int(h) for h in
                      os.getenv("VAISRAVANA_SESSION_BLOCK_UTC", "0,1,2,3,4,5").split(",")
                      if h.strip().isdigit()}
@@ -1812,7 +1815,10 @@ def _decide_tick(pair, conn, surface, lc, tel, kill, decider, notifier, open_tra
                 # channel every tick. The halt itself still applies every tick.
                 if kill.alert_due():
                     notifier.notify_kill_switch(kreason)
-                return
+                if not (os.getenv("VAISRAVANA_MODE", "paper").lower() == "paper" and PAPER_COLLECT_AFTER_KILL):
+                    return
+                tel.health("paper_collection", "WARN",
+                           detail=f"kill switch logged; paper collection continues: {kreason}")
 
         # decide under THIS strategy's profile (own entry bar + SL/TP mults)
         se = evaluate_strategy(profile, state, entry_price=dec[i].c,

@@ -1,5 +1,11 @@
 # Changelog — Project Vaiśravaṇa
 
+## 2026-08-03 — paper collection continues after kill trip
+
+- Added `VAISRAVANA_PAPER_COLLECT_AFTER_KILL=1` for paper-only evaluation windows.
+- Kill trips remain logged and alerted, but paper simulation continues collecting data.
+- Live mode still halts normally; this flag cannot bypass live safety.
+
 ## 2026-08-03 — fix: standalone noisy-market research layer
 
 - Added pure CVD-divergence and bounded regime-TP helpers in `src/alpha_signals.py`.
