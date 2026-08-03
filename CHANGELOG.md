@@ -1,5 +1,12 @@
 # Changelog — Project Vaiśravaṇa
 
+## 2026-08-03 — fix: standalone noisy-market research layer
+
+- Added pure CVD-divergence and bounded regime-TP helpers in `src/alpha_signals.py`.
+- Regime-adaptive TP is feature-flagged with `VAISRAVANA_REGIME_ADAPTIVE_TP=1`;
+  default behavior is unchanged until a paper A/B sample proves improvement.
+- Main remains standalone: no wave/alpha runtime imports or shared trading state.
+
 ## 2026-08-03 — observable decision-log failures
 
 - Decision audit writes remain best-effort so telemetry cannot halt paper trading,

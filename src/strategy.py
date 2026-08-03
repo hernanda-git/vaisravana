@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from config import ParameterSurface, StrategyProfile, default_profiles, default_surface
 from engines import MarketState
 from scoring import Decision, decide_ctx
+from alpha_signals import regime_tp_multiplier
 
 
 @dataclass
@@ -54,7 +55,8 @@ def active_strategies(
     return [p for name, p in profiles.items() if name not in disabled]
 
 
-def _sl_tp(side: str, entry_price: float, atr: float, profile: StrategyProfile, atr_pct: float = 0.01) -> tuple[float, float]:
+def _sl_tp(side: str, entry_price: float, atr: float, profile: StrategyProfile,
+           atr_pct: float = 0.01, regime: str = "range") -> tuple[float, float]:
     """Derive SL/TP from the profile's ATR multipliers (LONG below/above, SHORT mirrored).
 
     ATR regime modifier (additive, env-tunable): in high-vol regimes (atr_pct > 0.02)
@@ -63,7 +65,11 @@ def _sl_tp(side: str, entry_price: float, atr: float, profile: StrategyProfile, 
     """
     sl_dist = profile.sl_atr_mult * atr
     regime_mult = 1.0 + max(0.0, (atr_pct - 0.01)) * 10.0  # wider TP when vol > 1%
-    tp_dist = profile.tp_atr_mult * atr * regime_mult
+    base_tp = profile.tp_atr_mult * regime_mult
+    # Feature flag preserves current defaults; enable only in a paper A/B run.
+    if os.environ.get("VAISRAVANA_REGIME_ADAPTIVE_TP", "0") == "1":
+        base_tp = regime_tp_multiplier(regime, atr_pct, base=base_tp)
+    tp_dist = base_tp * atr
     if side == "BUY":
         return entry_price - sl_dist, entry_price + tp_dist
     return entry_price + sl_dist, entry_price - tp_dist
@@ -88,7 +94,8 @@ def evaluate_strategy(
         watch_threshold=profile.watch_threshold,
     )
     side = dec.side or ("BUY" if dec.long_score >= dec.short_score else "SELL")
-    sl_price, tp_price = _sl_tp(side, entry_price, atr, profile, atr_pct=state.atr_pct)
+    sl_price, tp_price = _sl_tp(side, entry_price, atr, profile,
+                                atr_pct=state.atr_pct, regime=state.regime)
     return StrategyEntry(
         strategy=profile.name,
         decision_tf=profile.decision_tf,

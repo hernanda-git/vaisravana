@@ -114,6 +114,12 @@ if one table becomes stale while another advances:
 
 ## remaining main-bot work
 
+Standalone research signals are feature-flagged and paper-only. CVD divergence is
+implemented as a pure candidate helper in `src/alpha_signals.py`; regime-adaptive
+TP is enabled only with `VAISRAVANA_REGIME_ADAPTIVE_TP=1`. These helpers do not
+place orders and the default behavior remains unchanged until an A/B sample proves
+fee-adjusted improvement.
+
 1. expose `_persist_decisions_log` failures at warning level with a rate limit and error category. (warning-level rate limiting is now implemented; freshness metrics remain.)
 2. add a telemetry freshness check for each table.
 3. synchronize source workspace and deployed tree through an explicit build/deploy command.
