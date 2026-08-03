@@ -114,7 +114,7 @@ if one table becomes stale while another advances:
 
 ## remaining main-bot work
 
-1. expose `_persist_decisions_log` failures at warning level with a rate limit and error category.
+1. expose `_persist_decisions_log` failures at warning level with a rate limit and error category. (warning-level rate limiting is now implemented; freshness metrics remain.)
 2. add a telemetry freshness check for each table.
 3. synchronize source workspace and deployed tree through an explicit build/deploy command.
 4. push local commit `3504a8f` after github auth is restored.

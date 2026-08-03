@@ -844,6 +844,9 @@ def reload_open_trades(conn: sqlite3.Connection, lc: TradeLifecycle) -> dict:
     return lc.get_open_positions()
 
 
+_LAST_DECISION_LOG_WARN = 0.0
+
+
 def _persist_decisions_log(conn, pair, tf, state, se, decision, reason=None):
     """Persist one evaluated decision (WATCH/SKIP/SUPPRESSED/ENTRY) to decisions_log.
 
@@ -884,7 +887,14 @@ def _persist_decisions_log(conn, pair, tf, state, se, decision, reason=None):
         )
         conn.commit()
     except Exception as e:  # never let a log write break the loop
-        log.debug("persist decisions_log failed: %s", e)
+        # Keep the trading loop alive, but make telemetry degradation observable.
+        # Rate-limit this because the function runs for every evaluated pair.
+        global _LAST_DECISION_LOG_WARN
+        now = time.time()
+        if now - _LAST_DECISION_LOG_WARN >= 60.0:
+            _LAST_DECISION_LOG_WARN = now
+            log.warning("persist decisions_log failed (%s %s %s): %s",
+                        pair, tf, decision, e)
 
 
 def run() -> None:

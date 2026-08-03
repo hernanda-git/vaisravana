@@ -1,5 +1,11 @@
 # Changelog — Project Vaiśravaṇa
 
+## 2026-08-03 — observable decision-log failures
+
+- Decision audit writes remain best-effort so telemetry cannot halt paper trading,
+  but failures now emit a rate-limited warning with pair, timeframe, decision, and
+  the underlying error instead of being debug-only and invisible.
+
 ## 2026-08-03 — Telegram trade-event cards and controlled paper experiment
 
 - Added a dedicated `PARTIAL` Telegram card for meaningful partial exits; it reports
