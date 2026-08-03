@@ -123,7 +123,7 @@ fee-adjusted improvement.
 1. expose `_persist_decisions_log` failures at warning level with a rate limit and error category. (warning-level rate limiting is now implemented; freshness metrics remain.)
 2. add a telemetry freshness check for each table.
 3. synchronize source workspace and deployed tree through an explicit build/deploy command.
-4. push local commit `3504a8f` after github auth is restored.
+4. push the latest standalone research commit after github auth is restored.
 5. collect at least 50 clean paper trades before strategy tuning.
 6. compare fee-adjusted net expectancy against the preserved baseline.
 7. do not enable live mode based on this sample.
