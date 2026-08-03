@@ -1360,6 +1360,18 @@ def run() -> None:
     # v0.0.22: add necessary imports for command handlers
     from datetime import datetime, timezone
 
+    # Start the owner command poller after every handler closure exists.
+    # Without this listener, Telegram can register commands and receive trade
+    # cards, but incoming commands are never consumed.
+    command_listener = TelegramCommandListener(
+        notifier,
+        _dispatch,
+        poll_s=2,
+        allowed_chat_id=os.getenv("NOTIFY_CHAT_ID", ""),
+        bot_username=os.getenv("VAISRAVANA_BOT_USERNAME", "vaisravana_bot"),
+    )
+    command_listener.start()
+
     while True:
         try:
             # owner /stop: graceful halt at the end of the current cycle

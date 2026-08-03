@@ -707,6 +707,23 @@ class TelegramNotifier:
         ]
         return self.send_message(self._card("📊", "Status", body))
 
+    def notify_health(self, version: str, summary: dict, stats: dict | None = None,
+                      control_state: str = "RUNNING") -> bool:
+        """Owner status card used by the main bot's /status command."""
+        stats = stats or {}
+        overall = summary.get("overall", {}) if summary else {}
+        body = [
+            f"v{html_escape(version)}",
+            "",
+            f"State     <code>{html_escape(control_state)}</code>",
+            f"WR        <code>{overall.get('win_rate_pct', 0.0):.1f}%</code>",
+            f"Closed    <code>{overall.get('n', 0)}</code>",
+            f"Open      <code>{summary.get('open_count', 0) if summary else 0}</code>",
+            f"Net PnL   {_fmt_usd((stats.get('realized', 0.0) if stats else 0.0))}",
+            f"Fees      <code>-{stats.get('total_fees', 0.0) if stats else 0.0:.4f}$</code>",
+        ]
+        return self.send_message(self._card("💚", "Vessavaṇa Status", body))
+
     def notify_health_check(
         self,
         version: str,
