@@ -192,8 +192,8 @@ MIN_NOTIONAL_USD = float(os.getenv("VAISRAVANA_MIN_NOTIONAL_USD", "5.0"))
 # round-trip fee may consume at most this fraction of 1R (dollar risk at SL)
 FEE_R_MAX_FRAC = float(os.getenv("VAISRAVANA_FEE_R_MAX_FRAC", "0.25"))
 # TP must be at least this % move from entry (expected move >= 3x round-trip cost)
-MIN_TP_MOVE_PCT = float(os.getenv("VAISRAVANA_MIN_TP_MOVE_PCT", "0.24"))
-MAX_ENTRIES_PER_HOUR = int(os.getenv("VAISRAVANA_MAX_ENTRIES_PER_HOUR", "10"))
+MIN_TP_MOVE_PCT = float(os.getenv("VAISRAVANA_MIN_TP_MOVE_PCT", "0.50"))
+MAX_ENTRIES_PER_HOUR = int(os.getenv("VAISRAVANA_MAX_ENTRIES_PER_HOUR", "3"))
 PAIR_ENTRY_SPACING_S = int(os.getenv("VAISRAVANA_PAIR_ENTRY_SPACING_S", "900"))
 # paper-only research mode: continue simulated collection after a kill trip.
 # live mode never bypasses the safety halt.
@@ -385,6 +385,9 @@ def entry_allowed(state, side: str, sc: int, sexp: float) -> tuple[bool, str]:
             return False, "SELL blocked: risk-on regime"
         if htf == "neutral" and not pullback and not getattr(state, "liq_sweep", False):
             return False, "SELL blocked: neutral HTF needs pullback or liquidity sweep"
+        # v2: bottom-chase guard — in trending_bear, SELL must come on a pullback
+        if getattr(state, "regime", "") == "trending_bear" and not pullback:
+            return False, "SELL blocked: extended bear tape, no pullback (bottom-chase guard)"
         return True, ""
 
 

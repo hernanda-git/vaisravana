@@ -119,11 +119,11 @@ def decide(
     surface = surface or default_surface()
     entry_bar = surface.entry_threshold if entry_threshold is None else entry_threshold
     watch_bar = surface.watch_threshold if watch_threshold is None else watch_threshold
-    # Aggressive scalping: lower surface defaults so the bot is always active
-    if entry_bar >= 0.50:
-        entry_bar = 0.45
-    if watch_bar >= 0.40:
-        watch_bar = 0.40
+    # v2: only enter on very strong setups
+    if entry_bar >= 0.80:
+        entry_bar = 0.75
+    if watch_bar >= 0.70:
+        watch_bar = 0.65
     long = score_side(s, "BUY", surface)
     short = score_side(s, "SELL", surface)
     if long >= short:
