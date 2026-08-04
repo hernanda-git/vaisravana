@@ -1,5 +1,11 @@
 # Changelog — Project Vaiśravaṇa
 
+## 2026-08-04 — stop losing paper run and preserve postmortem
+
+- stopped the main paper run after 25 closed trades reached -$1.09933 net after fees.
+- preserved the database and documented the exit/side breakdown in
+  `docs/POSTMORTEM-2026-08-04.md`.
+
 ## 2026-08-03 — paper collection continues after kill trip
 
 - Added `VAISRAVANA_PAPER_COLLECT_AFTER_KILL=1` for paper-only evaluation windows.
