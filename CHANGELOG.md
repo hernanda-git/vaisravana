@@ -1,5 +1,14 @@
 # Changelog — Project Vaiśravaṇa
 
+## 2026-08-04 — a/b experiment documentation and agent updates
+
+- Documented a/b experiment comparing baseline vs no-conf-collapse run.
+- Updated `AGENTS.md` with current experiment state and promotion criteria.
+- Added `docs/AB-EXPERIMENT-LOG.md` with experiment design, results, and next steps.
+- Baseline: 25 trades, 36% WR, -$1.0993 net after fees.
+- A/B candidate: 10 trades, 70% WR, +$0.1325 net after fees (sample too small).
+- Next checkpoint: 30 closed trades before drawing conclusions.
+
 ## 2026-08-04 — stop losing paper run and preserve postmortem
 
 - stopped the main paper run after 25 closed trades reached -$1.09933 net after fees.
