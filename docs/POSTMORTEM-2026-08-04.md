@@ -77,6 +77,13 @@ the run failed its fee-adjusted balance-growth objective. the kill switch correc
 - Default behavior remains enabled unless the paper deployment explicitly sets
   the flag to `0`.
 
+## a/b run
+
+The no-confidence-collapse experiment uses a separate database path:
+`/data/vaisravana-ab-no-conf.db`. This keeps the losing baseline and the new
+candidate statistically separate. The candidate started empty at 2026-08-04
+01:01 utc, remains paper-only, and has `VAISRAVANA_CONF_COLLAPSE_ENABLED=0`.
+
 ## source evidence
 
 all figures were queried directly from `/opt/bots/vaisravana/data/vaisravana.db` at stop time. the backup was copied before further changes.
