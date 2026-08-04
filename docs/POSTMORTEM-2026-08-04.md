@@ -69,6 +69,14 @@ the run failed its fee-adjusted balance-growth objective. the kill switch correc
 6. run a new paper candidate only after the above changes are documented and tested.
 7. no live promotion.
 
+## redesign started
+
+- `CONF_COLLAPSE` is now feature-flagged with
+  `VAISRAVANA_CONF_COLLAPSE_ENABLED`; the next paper experiment disables it so
+  its six losing exits can be evaluated without deleting the evidence.
+- Default behavior remains enabled unless the paper deployment explicitly sets
+  the flag to `0`.
+
 ## source evidence
 
 all figures were queried directly from `/opt/bots/vaisravana/data/vaisravana.db` at stop time. the backup was copied before further changes.

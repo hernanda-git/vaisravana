@@ -175,12 +175,15 @@ class PositionMonitor:
             # Fee floor: 2 × (0.0002 open + 0.0004 close) = 0.0012 RT → -0.12R
             #   needs the position to be at minimum -0.35R for the close to
             #   recover the fees on the next trade.
-            _MIN_R_FOR_CONF_COLLAPSE = -0.35  # was -0.20 — fee-aware threshold
+            _MIN_R_FOR_CONF_COLLAPSE = float(_os.getenv(
+                "VAISRAVANA_CONF_COLLAPSE_R", "-0.35"))
+            _CONF_COLLAPSE_ENABLED = _os.getenv(
+                "VAISRAVANA_CONF_COLLAPSE_ENABLED", "1") == "1"
             _MIN_SL_DIST_PCT = 0.0030  # 0.30% — was 0.0010 (0.10%)
             _sl_dist_pct = (
                 abs(pos.entry_price - pos.sl.stop_price) / pos.entry_price
             )
-            if (
+            if (_CONF_COLLAPSE_ENABLED and
                 r_now <= _MIN_R_FOR_CONF_COLLAPSE
                 and _sl_dist_pct > _MIN_SL_DIST_PCT
             ):
