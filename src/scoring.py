@@ -119,11 +119,8 @@ def decide(
     surface = surface or default_surface()
     entry_bar = surface.entry_threshold if entry_threshold is None else entry_threshold
     watch_bar = surface.watch_threshold if watch_threshold is None else watch_threshold
-    # v2: only enter on very strong setups
-    if entry_bar >= 0.80:
-        entry_bar = 0.75
-    if watch_bar >= 0.70:
-        watch_bar = 0.65
+    # v3: removed v2 scoring clamp — data-backed entry at 0.55 with tighter SL
+    # and wider bank (0.25R) is more profitable than 0.75 threshold with wide SL
     long = score_side(s, "BUY", surface)
     short = score_side(s, "SELL", surface)
     if long >= short:

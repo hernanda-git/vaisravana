@@ -99,20 +99,20 @@ def default_profiles() -> dict[str, StrategyProfile]:
     return {
         "scalping": StrategyProfile(
             name="scalping", decision_tf="1m", context_tfs=["5m", "15m"],
-            entry_threshold=0.75, watch_threshold=0.65,
-            sl_atr_mult=2.5, tp_atr_mult=2.5, max_hold_min=5, cooldown_min=1,
+            entry_threshold=0.55, watch_threshold=0.45,
+            sl_atr_mult=1.5, tp_atr_mult=3.0, max_hold_min=5, cooldown_min=1,
             winrate_floor_pct=45.0,
         ),
         "day": StrategyProfile(
             name="day", decision_tf="15m", context_tfs=["1h", "4h"],
-            entry_threshold=0.75, watch_threshold=0.65,
-            sl_atr_mult=2.5, tp_atr_mult=3.0, max_hold_min=60, cooldown_min=15,
+            entry_threshold=0.55, watch_threshold=0.45,
+            sl_atr_mult=1.5, tp_atr_mult=3.5, max_hold_min=60, cooldown_min=15,
             winrate_floor_pct=45.0,
         ),
         "swing": StrategyProfile(
             name="swing", decision_tf="1h", context_tfs=["4h", "1d"],
-            entry_threshold=0.75, watch_threshold=0.65,
-            sl_atr_mult=2.5, tp_atr_mult=4.0, max_hold_min=120, cooldown_min=60,
+            entry_threshold=0.55, watch_threshold=0.45,
+            sl_atr_mult=2.0, tp_atr_mult=4.5, max_hold_min=120, cooldown_min=60,
             winrate_floor_pct=45.0,
         ),
     }

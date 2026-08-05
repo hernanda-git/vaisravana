@@ -139,16 +139,18 @@ class PositionMonitor:
                 self._market_close(pos, "TP", mark)
                 continue
 
-            # 2b. bank_08r: once R >= +0.08, trail SL to lock profit.
-            # SL trails to +0.05R from entry (not a fixed price offset).
-            # This locks real profit progressively so a wave that peaks and
-            # retraces banks a win instead of round-tripping to a loss.
+            # 2b. bank_025r: once R >= +0.25, trail SL to lock profit.
+            # Data-backed (2026-08-04 crosscheck, n=671): bank at 0.08R
+            # truncates the fat right tail (mean peak 0.143R, 12.8% of
+            # trades reach 0.30R). Bank at 0.25R captures the tail while
+            # still letting winners run. SL trails to +0.10R from entry
+            # (breakeven + buffer) to lock real profit.
             r_now = self._unrealized_r(pos, mark)
-            if r_now >= 0.08:
+            if r_now >= 0.25:
                 risk = abs(pos.entry_price - pos.sl.stop_price)
                 if risk > 0:
                     if pos.side == "BUY":
-                        new_sl = pos.entry_price + 0.05 * risk
+                        new_sl = pos.entry_price + 0.10 * risk
                         if pos.sl.stop_price < new_sl:
                             pos.sl.stop_price = new_sl
                             if self.exchange is not None and hasattr(self.exchange, "update_sl"):
@@ -157,7 +159,7 @@ class PositionMonitor:
                                 except Exception:
                                     pass
                     else:
-                        new_sl = pos.entry_price - 0.05 * risk
+                        new_sl = pos.entry_price - 0.10 * risk
                         if pos.sl.stop_price > new_sl:
                             pos.sl.stop_price = new_sl
                             if self.exchange is not None and hasattr(self.exchange, "update_sl"):
